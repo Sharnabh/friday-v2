@@ -42,6 +42,11 @@ struct ContentView: View {
 
                 Section("Workspaces") {
                     Button {
+                        selectedTab = 0
+                    } label: {
+                        Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    Button {
                         selectedTab = 1
                     } label: {
                         Label("Memory Vault", systemImage: "brain.head.profile")
@@ -160,6 +165,37 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Top Bar: Active Bot Title, Session History Selector, and New Chat
+            HStack(spacing: 12) {
+                Text(state.currentBotDisplayName)
+                    .font(.headline)
+
+                Spacer()
+
+                if !state.savedSessions.isEmpty {
+                    Picker("Chats", selection: $state.currentSessionId) {
+                        ForEach(state.savedSessions) { sess in
+                            Text(sess.title).tag(sess.id)
+                        }
+                    }
+                    .frame(maxWidth: 240)
+                    .onChange(of: state.currentSessionId) { newId in
+                        state.selectSession(newId)
+                    }
+                }
+
+                Button {
+                    state.newChat()
+                } label: {
+                    Label("New Chat", systemImage: "square.and.pencil")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            .padding(.horizontal)
+            .padding(.top, 10)
+
+            Divider().padding(.vertical, 6)
+
             // Configuration bar (Model / Provider / Mic / Wake)
             HStack(spacing: 12) {
                 TextField("Provider (e.g. anthropic, gemini)", text: $state.provider)

@@ -16,11 +16,21 @@ public final class AppState: ObservableObject {
     @Published public var selectedMic: String = ""
 
     // Bots and Groups
-    @Published public var activeBotId: String = ""
+    @Published public var activeBotId: String = "" {
+        didSet {
+            if oldValue != activeBotId {
+                onBotChanged()
+            }
+        }
+    }
     @Published public var bots: [BotProfile] = []
     @Published public var groups: [BotGroup] = []
     @Published public var provider: String = ""
     @Published public var model: String = ""
+    
+    // Sessions & Conversations
+    @Published public var currentSessionId: String = ""
+    @Published public var savedSessions: [ChatSessionItem] = []
     
     // Memory & Reminders
     @Published public var memories: [MemoryEntry] = []
@@ -137,15 +147,81 @@ public final class AppState: ObservableObject {
         self.model = defaults.string(forKey: activeBotScope + "chatModel") ?? ""
     }
 
-    public func selectBot(_ id: String) {
+    public func onBotChanged() {
         defaults.set(provider, forKey: activeBotScope + "chatProvider")
         defaults.set(model, forKey: activeBotScope + "chatModel")
-        activeBotId = id
-        defaults.set(id, forKey: "activeBot")
+        defaults.set(activeBotId, forKey: "activeBot")
         self.provider = defaults.string(forKey: activeBotScope + "chatProvider") ?? ""
         self.model = defaults.string(forKey: activeBotScope + "chatModel") ?? ""
+        self.currentSessionId = defaults.string(forKey: activeBotScope + "fridaySession") ?? UUID().uuidString
+        defaults.set(currentSessionId, forKey: activeBotScope + "fridaySession")
+        AssistantService.shared.stopSpeaking()
         loadTranscripts()
+        loadSessions()
         loadMemories()
+        self.statusMessage = "Switched to \(currentBotDisplayName)"
+    }
+
+    public var currentBotDisplayName: String {
+        if isGroupSelected {
+            return groups.first(where: { $0.id == activeBotId })?.name ?? "Group Chat"
+        }
+        return bots.first(where: { $0.id == activeBotId })?.name ?? "FRIDAY"
+    }
+
+    public func selectBot(_ id: String) {
+        activeBotId = id
+    }
+
+    public func newChat() {
+        // Save current draft if any
+        let newId = UUID().uuidString
+        defaults.set(newId, forKey: activeBotScope + "fridaySession")
+        self.currentSessionId = newId
+        self.inputMessage = ""
+        AssistantService.shared.stopSpeaking()
+        loadTranscripts()
+        loadSessions()
+        self.statusMessage = "Started new conversation"
+    }
+
+    public func selectSession(_ id: String) {
+        defaults.set(id, forKey: activeBotScope + "fridaySession")
+        self.currentSessionId = id
+        AssistantService.shared.stopSpeaking()
+        loadTranscripts()
+        loadSessions()
+        self.statusMessage = "Loaded conversation"
+    }
+
+    public func loadSessions() {
+        let prefix = activeBotScope + "transcript."
+        let allKeys = defaults.dictionaryRepresentation().keys
+        let matching = allKeys.filter { $0.hasPrefix(prefix) }
+        
+        var list = [ChatSessionItem]()
+        for key in matching {
+            let id = String(key.dropFirst(prefix.count))
+            let turns = defaults.stringArray(forKey: key) ?? []
+            let firstTurn = turns.first ?? ""
+            let question = firstTurn.components(separatedBy: "\n\n").first?.dropFirst(4) ?? "Conversation"
+            let title = String(question.prefix(45)).replacingOccurrences(of: "\n", with: " ")
+            list.append(ChatSessionItem(id: id, title: title.isEmpty ? "New Chat" : title))
+        }
+
+        if !list.contains(where: { $0.id == currentSessionId }) {
+            list.insert(ChatSessionItem(id: currentSessionId, title: "Current Chat"), at: 0)
+        }
+        self.savedSessions = list
+    }
+
+    public func loadTranscripts() {
+        if currentSessionId.isEmpty {
+            self.currentSessionId = defaults.string(forKey: activeBotScope + "fridaySession") ?? UUID().uuidString
+            defaults.set(currentSessionId, forKey: activeBotScope + "fridaySession")
+        }
+        let key = activeBotScope + "transcript." + currentSessionId
+        self.currentTranscript = defaults.stringArray(forKey: key) ?? []
     }
 
     public func createBot(name: String, instructions: String) {
@@ -171,15 +247,15 @@ public final class AppState: ObservableObject {
     }
 
     public var sessionID: String {
-        if let id = defaults.string(forKey: activeBotScope + "fridaySession") { return id }
+        if !currentSessionId.isEmpty { return currentSessionId }
+        if let id = defaults.string(forKey: activeBotScope + "fridaySession") {
+            self.currentSessionId = id
+            return id
+        }
         let id = UUID().uuidString
+        self.currentSessionId = id
         defaults.set(id, forKey: activeBotScope + "fridaySession")
         return id
-    }
-
-    public func loadTranscripts() {
-        let key = activeBotScope + "transcript." + sessionID
-        self.currentTranscript = defaults.stringArray(forKey: key) ?? []
     }
 
     public func loadMemories(query: String = "") {

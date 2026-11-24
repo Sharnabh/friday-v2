@@ -96,6 +96,18 @@ public struct ExtractedFactPayload: Codable, Sendable {
     }
 }
 
+public struct ChatSessionItem: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let lastUpdated: Date
+
+    public init(id: String, title: String, lastUpdated: Date = Date()) {
+        self.id = id
+        self.title = title
+        self.lastUpdated = lastUpdated
+    }
+}
+
 public struct BotProfile: Codable, Identifiable, Sendable {
     public var id: String
     public var name: String
