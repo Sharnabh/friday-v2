@@ -122,6 +122,21 @@ public final class HybridMemoryStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // Deduplication check: do not insert identical triples
+        var checkStmt: OpaquePointer?
+        let checkSql = "SELECT id FROM graph_triples WHERE scope = ? AND subject = ? AND predicate = ? AND object = ? LIMIT 1"
+        if sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nil) == SQLITE_OK, let checkStmt = checkStmt {
+            sqlite3_bind_text(checkStmt, 1, triple.scope, -1, Self.transient)
+            sqlite3_bind_text(checkStmt, 2, triple.subject, -1, Self.transient)
+            sqlite3_bind_text(checkStmt, 3, triple.predicate, -1, Self.transient)
+            sqlite3_bind_text(checkStmt, 4, triple.object, -1, Self.transient)
+            if sqlite3_step(checkStmt) == SQLITE_ROW {
+                sqlite3_finalize(checkStmt)
+                return // Triple already exists
+            }
+            sqlite3_finalize(checkStmt)
+        }
+
         var stmt: OpaquePointer?
         let sql = """
         INSERT INTO graph_triples(scope, subject, predicate, object, confidence, created_at)
@@ -230,10 +245,29 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 try write("UPDATE memory_metadata SET importance=?, last_accessed_at=? WHERE rowid=?",
                           [String(importance), String(now), String(old.id)])
             } else {
-                try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
-                targetRowid = sqlite3_last_insert_rowid(db)
-                try write("INSERT OR REPLACE INTO memory_metadata(rowid, importance, created_at, last_accessed_at) VALUES(?,?,?,?)",
-                          [String(targetRowid), String(importance), String(now), String(now)])
+                // Deduplication check: if memory text already exists in this scope, update timestamp/importance and don't duplicate
+                var checkStmt: OpaquePointer?
+                let checkSql = "SELECT rowid FROM memories WHERE scope = ? AND body = ? LIMIT 1"
+                var existingId: Int64? = nil
+                if sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nil) == SQLITE_OK, let checkStmt = checkStmt {
+                    sqlite3_bind_text(checkStmt, 1, scope, -1, Self.transient)
+                    sqlite3_bind_text(checkStmt, 2, text, -1, Self.transient)
+                    if sqlite3_step(checkStmt) == SQLITE_ROW {
+                        existingId = sqlite3_column_int64(checkStmt, 0)
+                    }
+                    sqlite3_finalize(checkStmt)
+                }
+
+                if let existing = existingId {
+                    targetRowid = existing
+                    try write("UPDATE memory_metadata SET importance=max(importance, ?), last_accessed_at=? WHERE rowid=?",
+                              [String(importance), String(now), String(existing)])
+                } else {
+                    try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
+                    targetRowid = sqlite3_last_insert_rowid(db)
+                    try write("INSERT OR REPLACE INTO memory_metadata(rowid, importance, created_at, last_accessed_at) VALUES(?,?,?,?)",
+                              [String(targetRowid), String(importance), String(now), String(now)])
+                }
             }
 
             if let vector = embeddingModel?.vector(for: text) {

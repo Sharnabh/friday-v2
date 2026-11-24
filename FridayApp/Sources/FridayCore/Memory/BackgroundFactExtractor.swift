@@ -57,6 +57,63 @@ public final class BackgroundFactExtractor: Sendable {
 
     private init() {}
 
+    private static func isValidDurableFact(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.isEmpty || lower.count < 6 { return false }
+
+        // 1. Filter out negative non-facts
+        let negativePhrases = [
+            "no durable", "not stated", "not mentioned", "nothing mentioned",
+            "no facts", "no information", "no personal", "none mentioned",
+            "is not stated", "was not stated", "n/a", "none"
+        ]
+        for phrase in negativePhrases {
+            if lower.contains(phrase) { return false }
+        }
+        if lower.hasPrefix("no ") { return false }
+
+        // 2. Filter out conversational actions and turn mechanics
+        let ephemeralPhrases = [
+            "is speaking with", "speaking to", "talking to", "asked a question",
+            "asked this view", "message directed to", "directed to @", "in this turn",
+            "user said", "user greeted", "user asked", "addressed to", "wants an answer",
+            "in a message directed", "addressed to @"
+        ]
+        for phrase in ephemeralPhrases {
+            if lower.contains(phrase) { return false }
+        }
+
+        // 3. Filter out assistant descriptions
+        let botPhrases = [
+            "ai assistant", "hermes agent", "solar mini", "assistant built",
+            "assistant helps", "tools for browsing", "file reading", "workflow coordination"
+        ]
+        for phrase in botPhrases {
+            if lower.contains(phrase) { return false }
+        }
+
+        return true
+    }
+
+    private static func isValidDurableTriple(_ triple: ExtractedFactPayload.TriplePayload) -> Bool {
+        let subLower = triple.subject.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let predLower = triple.predicate.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let objLower = triple.object.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+
+        guard !subLower.isEmpty && !predLower.isEmpty && !objLower.isEmpty else { return false }
+
+        let ephemeralPreds = ["addressed_to", "is_speaking_with", "speaking_with", "directed_to", "talks_to", "greeted", "asked"]
+        for ep in ephemeralPreds {
+            if predLower.contains(ep) { return false }
+        }
+
+        if objLower.contains("assistant") || objLower.contains("hermes") || objLower.contains("turn") {
+            return false
+        }
+
+        return true
+    }
+
     /// Runs in background after every completed conversation turn to extract atomic facts & graph triples
     public func processTurn(
         userPrompt: String,
@@ -69,13 +126,15 @@ public final class BackgroundFactExtractor: Sendable {
     ) {
         Task.detached(priority: .utility) {
             let prompt = """
-            Extract any durable facts, personal attributes, or preferences about the USER mentioned in this turn.
-            CRITICAL:
-            - Distinguish between the human USER and the AI assistant (\(botName)).
-            - Never confuse the AI assistant's name (\(botName)) or system identity with the human user.
-            - If the user states their own name, attribute it to the User.
-            - General user identity facts (like the user's name, email, job, location) should be marked with "scope": "shared".
-            - Bot-specific discussion notes should be marked with "scope": "\(scope)".
+            [TASK: PERMANENT USER PROFILE FACT EXTRACTION]
+            Extract ONLY enduring, permanent facts about the HUMAN USER explicitly stated by the user themselves in their message (e.g. user's name, email, job, city, or long-term preferences).
+
+            STRICT FILTERING RULES:
+            1. ONLY extract information that the Human User explicitly stated about themselves.
+            2. NEVER extract conversational actions, turn mechanics, or routing (do NOT extract "User asked...", "User spoke to...", "User addressed @...").
+            3. NEVER extract what the AI assistant said about itself, its tools, or its capabilities.
+            4. NEVER return negative statements (NEVER output "No facts mentioned", "User's name is not stated", or "None").
+            5. If no permanent personal facts about the user were explicitly revealed, return {"facts":[], "triples":[]}.
 
             Output JSON only in this format:
             {
@@ -83,15 +142,13 @@ public final class BackgroundFactExtractor: Sendable {
               "triples": [{"subject":"User", "predicate":"name", "object":"Sharnabh", "scope":"shared"}],
               "importance": 8
             }
-            If nothing durable was mentioned, return {"facts":[], "triples":[]}.
 
             Human User said: "\(userPrompt)"
-            AI Assistant (\(botName)) replied: "\(assistantResponse.prefix(400))"
             """
 
             do {
                 let hermes = NSHomeDirectory() + "/.local/bin/hermes"
-                var args = ["chat", "--quiet", "--reasoning", "none"]
+                var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
                 if !provider.isEmpty { args += ["--provider", provider] }
                 if !model.isEmpty { args += ["--model", model] }
                 args += ["-q", prompt]
@@ -104,11 +161,11 @@ public final class BackgroundFactExtractor: Sendable {
                     return
                 }
 
-                // 1. Save atomic facts with extracted importance
+                // 1. Save validated atomic facts with extracted importance
                 let imp = payload.importance ?? 5
                 for item in payload.facts {
                     let factText = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !factText.isEmpty else { continue }
+                    guard Self.isValidDurableFact(factText) else { continue }
 
                     // Determine scope: if item has explicit scope, use it; otherwise check if it's general user identity
                     let lower = factText.lowercased()
@@ -122,8 +179,9 @@ public final class BackgroundFactExtractor: Sendable {
                     WorkingMemoryCache.shared.invalidate(scope: factScope)
                 }
 
-                // 2. Save graph relation triples (GraphRAG)
+                // 2. Save validated graph relation triples (GraphRAG)
                 for triple in payload.triples {
+                    guard Self.isValidDurableTriple(triple) else { continue }
                     let subLower = triple.subject.lowercased()
                     let isUserTriple = subLower == "user" || subLower == "human"
                     let tripleScope = triple.scope ?? (isUserTriple ? "shared" : scope)
