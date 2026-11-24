@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import NaturalLanguage
+import Accelerate
 
 public final class HybridMemoryStore: @unchecked Sendable {
     private var db: OpaquePointer?
@@ -25,11 +26,28 @@ public final class HybridMemoryStore: @unchecked Sendable {
             pinned UNINDEXED,
             tokenize='porter unicode61'
         );
+        CREATE TABLE IF NOT EXISTS memory_metadata (
+            rowid INTEGER PRIMARY KEY,
+            importance INTEGER DEFAULT 5,
+            created_at REAL,
+            last_accessed_at REAL
+        );
         CREATE TABLE IF NOT EXISTS memory_vectors (
             rowid INTEGER PRIMARY KEY,
             scope TEXT,
             vector BLOB
         );
+        CREATE TABLE IF NOT EXISTS graph_triples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT,
+            subject TEXT,
+            predicate TEXT,
+            object TEXT,
+            confidence REAL DEFAULT 1.0,
+            created_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_graph_triples_sub ON graph_triples(scope, subject);
+        CREATE INDEX IF NOT EXISTS idx_graph_triples_obj ON graph_triples(scope, object);
         CREATE TABLE IF NOT EXISTS imported (
             scope TEXT PRIMARY KEY
         );
@@ -84,37 +102,122 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
     }
 
-    private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+    /// SIMD-Accelerated Cosine Similarity using Apple Accelerate (vDSP)
+    private func vdspCosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot: Float = 0
         var normA: Float = 0
         var normB: Float = 0
-        for i in 0..<a.count {
-            dot += a[i] * b[i]
-            normA += a[i] * a[i]
-            normB += b[i] * b[i]
-        }
+        let count = vDSP_Length(a.count)
+        vDSP_dotpr(a, 1, b, 1, &dot, count)
+        vDSP_svesq(a, 1, &normA, count)
+        vDSP_svesq(b, 1, &normB, count)
         let denom = sqrt(normA) * sqrt(normB)
         return denom > 0 ? (dot / denom) : 0
     }
 
-    public func importNote(_ scope: String, _ note: String) throws {
-        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    // MARK: - Graph Triples (GraphRAG)
+
+    public func saveTriple(_ triple: GraphTriple) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var stmt: OpaquePointer?
+        let sql = """
+        INSERT INTO graph_triples(scope, subject, predicate, object, confidence, created_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
+            throw failure()
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, triple.scope, -1, Self.transient)
+        sqlite3_bind_text(stmt, 2, triple.subject, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, triple.predicate, -1, Self.transient)
+        sqlite3_bind_text(stmt, 4, triple.object, -1, Self.transient)
+        sqlite3_bind_double(stmt, 5, triple.confidence)
+        sqlite3_bind_double(stmt, 6, triple.createdAt.timeIntervalSince1970)
+
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+    }
+
+    public func queryTriples(query: String, scope: String, limit: Int = 10) throws -> [GraphTriple] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let clean = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !clean.isEmpty else { return [] }
+
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT id, scope, subject, predicate, object, confidence, created_at
+        FROM graph_triples
+        WHERE scope IN ('shared', ?)
+          AND (lower(subject) LIKE ? OR lower(predicate) LIKE ? OR lower(object) LIKE ?)
+        ORDER BY id DESC LIMIT ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
+            throw failure()
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        let wildcard = "%\(clean)%"
+        sqlite3_bind_text(stmt, 1, scope, -1, Self.transient)
+        sqlite3_bind_text(stmt, 2, wildcard, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, wildcard, -1, Self.transient)
+        sqlite3_bind_text(stmt, 4, wildcard, -1, Self.transient)
+        sqlite3_bind_int(stmt, 5, Int32(limit))
+
+        var results = [GraphTriple]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let sScope = String(cString: sqlite3_column_text(stmt, 1))
+            let sub = String(cString: sqlite3_column_text(stmt, 2))
+            let pred = String(cString: sqlite3_column_text(stmt, 3))
+            let obj = String(cString: sqlite3_column_text(stmt, 4))
+            let conf = sqlite3_column_double(stmt, 5)
+            let created = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+
+            results.append(GraphTriple(id: id, scope: sScope, subject: sub, predicate: pred, object: obj, confidence: conf, createdAt: created))
+        }
+        return results
+    }
+
+    // MARK: - Save and Invalidation
+
+    public func save(_ body: String, scope: String, source: String, importance: Int = 5, original: MemoryEntry?) throws {
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw FridayError.message("Enter a memory before saving.") }
+
         lock.lock()
         defer { lock.unlock() }
 
         try exec("BEGIN IMMEDIATE")
         do {
-            try write("INSERT OR IGNORE INTO imported VALUES(?)", [scope])
-            if sqlite3_changes(db) > 0 {
-                let revision = UUID().uuidString
-                try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'1')",
-                          [scope, text, "Imported project note", revision])
-                let rowid = sqlite3_last_insert_rowid(db)
-                if let emb = embeddingModel?.vector(for: text) {
-                    try storeVector(rowid: rowid, scope: scope, vector: emb)
+            let revision = UUID().uuidString
+            let args = [scope, text, source, revision]
+
+            let targetRowid: Int64
+            let now = Date().timeIntervalSince1970
+            if let old = original {
+                try write("UPDATE memories SET scope=?,body=?,source=?,revision=? WHERE rowid=? AND revision=?",
+                          args + [String(old.id), old.revision])
+                guard sqlite3_changes(db) == 1 else {
+                    throw FridayError.message("This memory changed. Reopen it before editing.")
                 }
+                targetRowid = old.id
+                try write("UPDATE memory_metadata SET importance=?, last_accessed_at=? WHERE rowid=?",
+                          [String(importance), String(now), String(old.id)])
+            } else {
+                try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
+                targetRowid = sqlite3_last_insert_rowid(db)
+                try write("INSERT OR REPLACE INTO memory_metadata(rowid, importance, created_at, last_accessed_at) VALUES(?,?,?,?)",
+                          [String(targetRowid), String(importance), String(now), String(now)])
+            }
+
+            if let vector = embeddingModel?.vector(for: text) {
+                try storeVector(rowid: targetRowid, scope: scope, vector: vector)
             }
             try exec("COMMIT")
         } catch {
@@ -140,41 +243,6 @@ public final class HybridMemoryStore: @unchecked Sendable {
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
     }
 
-    public func save(_ body: String, scope: String, source: String, original: MemoryEntry?) throws {
-        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw FridayError.message("Enter a memory before saving.") }
-
-        lock.lock()
-        defer { lock.unlock() }
-
-        try exec("BEGIN IMMEDIATE")
-        do {
-            let revision = UUID().uuidString
-            let args = [scope, text, source, revision]
-
-            let targetRowid: Int64
-            if let old = original {
-                try write("UPDATE memories SET scope=?,body=?,source=?,revision=? WHERE rowid=? AND revision=?",
-                          args + [String(old.id), old.revision])
-                guard sqlite3_changes(db) == 1 else {
-                    throw FridayError.message("This memory changed. Reopen it before editing.")
-                }
-                targetRowid = old.id
-            } else {
-                try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
-                targetRowid = sqlite3_last_insert_rowid(db)
-            }
-
-            if let vector = embeddingModel?.vector(for: text) {
-                try storeVector(rowid: targetRowid, scope: scope, vector: vector)
-            }
-            try exec("COMMIT")
-        } catch {
-            try? exec("ROLLBACK")
-            throw error
-        }
-    }
-
     public func remove(_ entry: MemoryEntry) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -186,6 +254,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 throw FridayError.message("This memory changed. Refresh the search.")
             }
             try write("DELETE FROM memory_vectors WHERE rowid=?", [String(entry.id)])
+            try write("DELETE FROM memory_metadata WHERE rowid=?", [String(entry.id)])
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")
@@ -193,62 +262,95 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
     }
 
-    /// Hybrid Search: Combines BM25 / FTS5 ranking and Sentence Embedding Cosine Similarity via RRF (Reciprocal Rank Fusion)
+    // MARK: - Stanford Generative Agents Composite Search
+
     public func search(_ query: String, scope: String, limit: Int = 100, pinnedOnly: Bool = false) throws -> [MemoryEntry] {
         lock.lock()
         defer { lock.unlock() }
 
         let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // 1. Lexical Search (FTS5)
         let lexicalResults = try ftsSearch(cleanQuery, scope: scope, limit: limit, pinnedOnly: pinnedOnly)
-        
-        // If query is empty or pinnedOnly, lexical results (recent / pinned) are sufficient
+
         if cleanQuery.isEmpty || pinnedOnly || embeddingModel == nil {
             return lexicalResults
         }
 
-        // 2. Semantic Search (Dense Cosine Similarity on Sentence Embeddings)
         guard let queryVector = embeddingModel?.vector(for: cleanQuery)?.map({ Float($0) }) else {
             return lexicalResults
         }
 
-        let vectorResults = try vectorSearch(queryVector, scope: scope, limit: limit)
+        // SIMD-Accelerated vector search
+        let vectorResults = try vdspVectorSearch(queryVector, scope: scope, limit: limit)
 
-        // 3. Reciprocal Rank Fusion (RRF)
-        // RRF Score = SUM( 1 / (60 + rank_i) )
-        var rrfScores = [Int64: Double]()
+        // Composite Stanford Scoring: Score = 0.5 * RRF_Relevance + 0.3 * Recency + 0.2 * Importance
+        var compositeMap = [Int64: Double]()
         var entryMap = [Int64: MemoryEntry]()
+        let now = Date().timeIntervalSince1970
 
         for (rank, entry) in lexicalResults.enumerated() {
             entryMap[entry.id] = entry
-            rrfScores[entry.id, default: 0.0] += 1.0 / Double(60 + rank + 1)
+            let rrfRelevance = 1.0 / Double(60 + rank + 1)
+            compositeMap[entry.id, default: 0.0] += 0.5 * rrfRelevance
         }
 
         for (rank, entry) in vectorResults.enumerated() {
             entryMap[entry.id] = entry
-            rrfScores[entry.id, default: 0.0] += 1.0 / Double(60 + rank + 1)
+            let rrfRelevance = 1.0 / Double(60 + rank + 1)
+            compositeMap[entry.id, default: 0.0] += 0.5 * rrfRelevance
         }
 
-        let sortedEntries = rrfScores.sorted { $0.value > $1.value }
-            .prefix(limit)
-            .compactMap { entryMap[$0.key] }
+        // Apply Exponential Recency Decay & Importance
+        for (id, entry) in entryMap {
+            let daysSinceAccess = max(0, (now - entry.lastAccessedAt.timeIntervalSince1970) / 86400.0)
+            let recencyScore = exp(-0.05 * daysSinceAccess)
+            let normalizedImportance = Double(entry.importance) / 10.0
+            compositeMap[id, default: 0.0] += (0.3 * recencyScore) + (0.2 * normalizedImportance)
+        }
 
-        return sortedEntries
+        let sorted = compositeMap.sorted { $0.value > $1.value }
+            .prefix(limit)
+            .compactMap { pair -> MemoryEntry? in
+                guard let base = entryMap[pair.key] else { return nil }
+                return MemoryEntry(
+                    id: base.id,
+                    scope: base.scope,
+                    body: base.body,
+                    source: base.source,
+                    revision: base.revision,
+                    importance: base.importance,
+                    createdAt: base.createdAt,
+                    lastAccessedAt: Date(), // Update access time
+                    similarity: base.similarity,
+                    compositeScore: pair.value
+                )
+            }
+
+        // Touch last_accessed_at in DB asynchronously/lazily
+        if let firstId = sorted.first?.id {
+            _ = try? write("UPDATE memory_metadata SET last_accessed_at=? WHERE rowid=?", [String(now), String(firstId)])
+        }
+
+        return sorted
     }
 
     private func ftsSearch(_ query: String, scope: String, limit: Int, pinnedOnly: Bool) throws -> [MemoryEntry] {
         let tokens = query.lowercased().split { !$0.isLetter && !$0.isNumber }.prefix(32)
-        var sql = "SELECT rowid, scope, body, source, revision FROM memories WHERE scope IN ('shared', ?)"
+        var sql = """
+        SELECT m.rowid, m.scope, m.body, m.source, m.revision, 
+               COALESCE(d.importance, 5), COALESCE(d.created_at, 0), COALESCE(d.last_accessed_at, 0)
+        FROM memories m
+        LEFT JOIN memory_metadata d ON m.rowid = d.rowid
+        WHERE m.scope IN ('shared', ?)
+        """
         var args = [scope]
-        if pinnedOnly { sql += " AND pinned='1'" }
+        if pinnedOnly { sql += " AND m.pinned='1'" }
 
         if !tokens.isEmpty {
-            sql += " AND memories MATCH ? ORDER BY rank, rowid DESC"
+            sql += " AND memories MATCH ? ORDER BY rank, m.rowid DESC"
             args.append(tokens.map { "\"" + $0 + "\"" }.joined(separator: " OR "))
         } else {
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
-            sql += " ORDER BY rowid DESC"
+            sql += " ORDER BY m.rowid DESC"
         }
 
         let stmt = try statement(sql + " LIMIT ?", args + [String(limit)])
@@ -265,17 +367,22 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 scope: col(1),
                 body: col(2),
                 source: col(3),
-                revision: col(4)
+                revision: col(4),
+                importance: Int(sqlite3_column_int(stmt, 5)),
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6)),
+                lastAccessedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
             ))
         }
     }
 
-    private func vectorSearch(_ queryVector: [Float], scope: String, limit: Int) throws -> [MemoryEntry] {
+    private func vdspVectorSearch(_ queryVector: [Float], scope: String, limit: Int) throws -> [MemoryEntry] {
         var stmt: OpaquePointer?
         let sql = """
-        SELECT m.rowid, m.scope, m.body, m.source, m.revision, v.vector 
+        SELECT m.rowid, m.scope, m.body, m.source, m.revision, 
+               COALESCE(d.importance, 5), COALESCE(d.created_at, 0), COALESCE(d.last_accessed_at, 0), v.vector 
         FROM memories m
         JOIN memory_vectors v ON m.rowid = v.rowid
+        LEFT JOIN memory_metadata d ON m.rowid = d.rowid
         WHERE m.scope IN ('shared', ?)
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
@@ -291,13 +398,26 @@ public final class HybridMemoryStore: @unchecked Sendable {
             let body = String(cString: sqlite3_column_text(stmt, 2))
             let source = String(cString: sqlite3_column_text(stmt, 3))
             let revision = String(cString: sqlite3_column_text(stmt, 4))
+            let importance = Int(sqlite3_column_int(stmt, 5))
+            let created = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+            let accessed = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
 
-            if let blobPtr = sqlite3_column_blob(stmt, 5) {
-                let blobBytes = sqlite3_column_bytes(stmt, 5)
+            if let blobPtr = sqlite3_column_blob(stmt, 8) {
+                let blobBytes = sqlite3_column_bytes(stmt, 8)
                 let data = Data(bytes: blobPtr, count: Int(blobBytes))
                 let candidateVector = decodeVector(data)
-                let sim = cosineSimilarity(queryVector, candidateVector)
-                let entry = MemoryEntry(id: rowid, scope: entryScope, body: body, source: source, revision: revision, similarity: Double(sim))
+                let sim = vdspCosineSimilarity(queryVector, candidateVector)
+                let entry = MemoryEntry(
+                    id: rowid,
+                    scope: entryScope,
+                    body: body,
+                    source: source,
+                    revision: revision,
+                    importance: importance,
+                    createdAt: created,
+                    lastAccessedAt: accessed,
+                    similarity: Double(sim)
+                )
                 scored.append((entry, sim))
             }
         }

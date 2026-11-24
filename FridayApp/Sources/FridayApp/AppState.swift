@@ -344,10 +344,23 @@ public final class AppState: ObservableObject {
                         isBusy = false
                         return
                     } else {
-                        // Hybrid Memory Context Injection
+                        // Fast LRU Working Memory Cache & Hybrid Context Retrieval
                         var context = ""
-                        if let store = memoryStore, let results = try? store.search(text, scope: memoryScope, limit: 3) {
-                            context = results.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
+                        let cacheKey = self.memoryScope + "::" + text
+                        if let cached = WorkingMemoryCache.shared.get(key: cacheKey) {
+                            context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
+                        } else if let store = memoryStore {
+                            var contextLines = [String]()
+                            // 1. Graph Triples Join (GraphRAG)
+                            if let triples = try? store.queryTriples(query: text, scope: memoryScope, limit: 3), !triples.isEmpty {
+                                contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
+                            }
+                            // 2. Hybrid Stanford-Scored Semantic Memories
+                            if let results = try? store.search(text, scope: memoryScope, limit: 3) {
+                                WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
+                                contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
+                            }
+                            context = contextLines.joined(separator: "\n")
                         }
                         statusMessage = "Streaming response…"
                         reply = try await AssistantService.shared.streamChat(
@@ -369,6 +382,18 @@ public final class AppState: ObservableObject {
                 self.statusMessage = "Ready"
                 self.isBusy = false
                 AssistantService.shared.speak(reply)
+
+                // Autonomous Background Fact & Graph Triple Extraction
+                if let store = self.memoryStore {
+                    BackgroundFactExtractor.shared.processTurn(
+                        userPrompt: text,
+                        assistantResponse: reply,
+                        scope: self.memoryScope,
+                        store: store,
+                        provider: self.provider,
+                        model: self.model
+                    )
+                }
 
             } catch {
                 self.statusMessage = "Error: \(error.localizedDescription)"

@@ -17,15 +17,82 @@ public struct MemoryEntry: Identifiable, Sendable {
     public let body: String
     public let source: String
     public let revision: String
+    public let importance: Int
+    public let createdAt: Date
+    public let lastAccessedAt: Date
     public let similarity: Double?
+    public let compositeScore: Double?
     
-    public init(id: Int64, scope: String, body: String, source: String, revision: String, similarity: Double? = nil) {
+    public init(
+        id: Int64,
+        scope: String,
+        body: String,
+        source: String,
+        revision: String,
+        importance: Int = 5,
+        createdAt: Date = Date(),
+        lastAccessedAt: Date = Date(),
+        similarity: Double? = nil,
+        compositeScore: Double? = nil
+    ) {
         self.id = id
         self.scope = scope
         self.body = body
         self.source = source
         self.revision = revision
+        self.importance = importance
+        self.createdAt = createdAt
+        self.lastAccessedAt = lastAccessedAt
         self.similarity = similarity
+        self.compositeScore = compositeScore
+    }
+}
+
+public struct GraphTriple: Identifiable, Codable, Sendable {
+    public let id: Int64
+    public let scope: String
+    public let subject: String
+    public let predicate: String
+    public let object: String
+    public let confidence: Double
+    public let createdAt: Date
+
+    public init(id: Int64 = 0, scope: String, subject: String, predicate: String, object: String, confidence: Double = 1.0, createdAt: Date = Date()) {
+        self.id = id
+        self.scope = scope
+        self.subject = subject
+        self.predicate = predicate
+        self.object = object
+        self.confidence = confidence
+        self.createdAt = createdAt
+    }
+
+    public var summary: String {
+        "(\(subject)) —[\(predicate)]→ (\(object))"
+    }
+}
+
+public struct ExtractedFactPayload: Codable, Sendable {
+    public let facts: [String]
+    public let triples: [TriplePayload]
+    public let importance: Int?
+
+    public struct TriplePayload: Codable, Sendable {
+        public let subject: String
+        public let predicate: String
+        public let object: String
+
+        public init(subject: String, predicate: String, object: String) {
+            self.subject = subject
+            self.predicate = predicate
+            self.object = object
+        }
+    }
+
+    public init(facts: [String] = [], triples: [TriplePayload] = [], importance: Int? = 5) {
+        self.facts = facts
+        self.triples = triples
+        self.importance = importance
     }
 }
 
