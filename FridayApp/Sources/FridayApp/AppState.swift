@@ -799,27 +799,42 @@ public final class AppState: ObservableObject {
                     // 3. Execution: Single Bot or Multi-Agent Turn Orchestration
                     if candidates.count == 1 {
                         let single = candidates[0]
-                        statusMessage = "Streaming response…"
+                        self.statusMessage = "\(single.name) is typing…"
+
+                        var botAccumulated = ""
+                        turns.append(single.name + "\n")
+                        self.currentTranscript = turns
+
+                        let chatHistory = turns.dropLast().map { $0 }
                         reply = try await AssistantService.shared.streamChat(
                             prompt: text,
-                            history: turns,
+                            history: chatHistory,
                             provider: single.provider,
                             model: single.model,
                             sessionID: sessionID,
                             contextMemory: context,
                             botName: single.name,
                             botInstructions: single.instructions,
-                            onChunk: { _ in }
+                            onChunk: { chunk in
+                                Task { @MainActor in
+                                    botAccumulated += chunk
+                                    if let lastIdx = self.currentTranscript.indices.last {
+                                        self.currentTranscript[lastIdx] = single.name + "\n" + botAccumulated
+                                    }
+                                }
+                            }
                         )
-                        let cleanReply = AssistantService.cleanBotReply(reply, botName: single.name)
-                        turns.append(single.name + "\n" + cleanReply)
+                        let cleanReply = AssistantService.cleanBotReply(reply.isEmpty ? botAccumulated : reply, botName: single.name)
+                        if turns.indices.contains(turns.count - 1) {
+                            turns[turns.count - 1] = single.name + "\n" + cleanReply
+                        }
                         defaults.set(turns, forKey: key)
                         self.currentTranscript = turns
                         self.statusMessage = "Ready"
                         self.isBusy = false
                         AssistantService.shared.speak(cleanReply)
                     } else {
-                        statusMessage = "Orchestrating agent collaboration…"
+                        self.statusMessage = "Orchestrating agent collaboration…"
                         let respondingNames = try await AssistantService.shared.resolveRespondingBots(
                             transcript: turns,
                             userMessage: text,
@@ -831,8 +846,13 @@ public final class AppState: ObservableObject {
                         for targetName in respondingNames {
                             guard let target = candidates.first(where: { $0.name.caseInsensitiveCompare(targetName) == .orderedSame }) else { continue }
 
-                            statusMessage = "\(target.name) is replying…"
-                            let contextTurns = turns.suffix(16).joined(separator: "\n\n")
+                            self.statusMessage = "\(target.name) is typing…"
+
+                            var botAccumulated = ""
+                            turns.append(target.name + "\n")
+                            self.currentTranscript = turns
+
+                            let contextTurns = turns.dropLast().suffix(16).joined(separator: "\n\n")
                             let otherBots = candidates.filter { $0.name.caseInsensitiveCompare(target.name) != .orderedSame }.map { $0.name }
                             let otherBotsNotice = otherBots.isEmpty ? "" : "Other bots in this conversation: \(otherBots.joined(separator: ", "))."
 
@@ -861,20 +881,33 @@ public final class AppState: ObservableObject {
                             let rawMemberReply = try await AssistantService.shared.executeRawChat(
                                 prompt: groupPrompt,
                                 provider: target.provider,
-                                model: target.model
+                                model: target.model,
+                                onChunk: { chunk in
+                                    Task { @MainActor in
+                                        botAccumulated += chunk
+                                        if let lastIdx = self.currentTranscript.indices.last {
+                                            self.currentTranscript[lastIdx] = target.name + "\n" + botAccumulated
+                                        }
+                                    }
+                                }
                             )
                             let memberReply = AssistantService.cleanBotReply(
-                                rawMemberReply,
+                                rawMemberReply.isEmpty ? botAccumulated : rawMemberReply,
                                 botName: target.name,
                                 otherBotNames: candidates.map(\.name)
                             )
-                            guard !memberReply.isEmpty else { continue }
-                            turns.append(target.name + "\n" + memberReply)
+                            if !memberReply.isEmpty {
+                                if turns.indices.contains(turns.count - 1) {
+                                    turns[turns.count - 1] = target.name + "\n" + memberReply
+                                }
+                            } else {
+                                if !turns.isEmpty { turns.removeLast() }
+                            }
                             defaults.set(turns, forKey: key)
                             self.currentTranscript = turns
                         }
 
-                        statusMessage = "Ready"
+                        self.statusMessage = "Ready"
                         self.isBusy = false
                         if let lastTurn = turns.last {
                             let textToSpeak = lastTurn.components(separatedBy: "\n").dropFirst().joined(separator: "\n")

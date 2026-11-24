@@ -641,7 +641,14 @@ struct ChatView: View {
                     }
                     .onChange(of: state.currentTranscript.count) { _, _ in
                         if let last = state.currentTranscript.indices.last {
-                            withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                proxy.scrollTo(last, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onChange(of: state.currentTranscript.last) { _, _ in
+                        if let last = state.currentTranscript.indices.last {
+                            proxy.scrollTo(last, anchor: .bottom)
                         }
                     }
                 }
@@ -958,20 +965,27 @@ func parseMarkdown(_ input: String) -> [MarkdownBlock] {
             }
         }
 
-        // Unordered list (- item, * item, • item)
-        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
+        // Unordered list (- item, * item, • item, + item)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") || trimmed.hasPrefix("+ ") {
             var listItems: [String] = []
             while i < count {
                 let rawLine = lines[i]
                 let lTrimmed = rawLine.trimmingCharacters(in: .whitespaces)
                 if lTrimmed.isEmpty {
+                    if i + 1 < count {
+                        let nextTrimmed = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                        if nextTrimmed.hasPrefix("- ") || nextTrimmed.hasPrefix("* ") || nextTrimmed.hasPrefix("• ") || nextTrimmed.hasPrefix("+ ") {
+                            i += 1
+                            continue
+                        }
+                    }
                     break
                 }
-                if lTrimmed.hasPrefix("- ") || lTrimmed.hasPrefix("* ") || lTrimmed.hasPrefix("• ") {
+                if lTrimmed.hasPrefix("- ") || lTrimmed.hasPrefix("* ") || lTrimmed.hasPrefix("• ") || lTrimmed.hasPrefix("+ ") {
                     let item = String(lTrimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
                     listItems.append(item)
                     i += 1
-                } else if rawLine.hasPrefix("  ") && !listItems.isEmpty {
+                } else if (rawLine.hasPrefix(" ") || rawLine.hasPrefix("\t")) && !listItems.isEmpty {
                     listItems[listItems.count - 1] += "\n" + lTrimmed
                     i += 1
                 } else {
@@ -982,23 +996,31 @@ func parseMarkdown(_ input: String) -> [MarkdownBlock] {
             continue
         }
 
-        // Ordered list (1. item)
-        let firstWord = trimmed.prefix(while: { $0.isNumber || $0 == "." })
-        if firstWord.hasSuffix(".") && trimmed.count > firstWord.count && trimmed[trimmed.index(trimmed.startIndex, offsetBy: firstWord.count)] == " " {
+        // Ordered list (1. item, 1) item)
+        let firstWord = trimmed.prefix(while: { $0.isNumber || $0 == "." || $0 == ")" })
+        if (firstWord.hasSuffix(".") || firstWord.hasSuffix(")")) && trimmed.count > firstWord.count && trimmed[trimmed.index(trimmed.startIndex, offsetBy: firstWord.count)] == " " {
             var listItems: [OrderedListItem] = []
             while i < count {
                 let rawLine = lines[i]
                 let lTrimmed = rawLine.trimmingCharacters(in: .whitespaces)
                 if lTrimmed.isEmpty {
+                    if i + 1 < count {
+                        let nextTrimmed = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                        let nextW = nextTrimmed.prefix(while: { $0.isNumber || $0 == "." || $0 == ")" })
+                        if (nextW.hasSuffix(".") || nextW.hasSuffix(")")) && nextTrimmed.count > nextW.count && nextTrimmed[nextTrimmed.index(nextTrimmed.startIndex, offsetBy: nextW.count)] == " " {
+                            i += 1
+                            continue
+                        }
+                    }
                     break
                 }
-                let numWord = lTrimmed.prefix(while: { $0.isNumber || $0 == "." })
-                if numWord.hasSuffix(".") && lTrimmed.count > numWord.count && lTrimmed[lTrimmed.index(lTrimmed.startIndex, offsetBy: numWord.count)] == " " {
+                let numWord = lTrimmed.prefix(while: { $0.isNumber || $0 == "." || $0 == ")" })
+                if (numWord.hasSuffix(".") || numWord.hasSuffix(")")) && lTrimmed.count > numWord.count && lTrimmed[lTrimmed.index(lTrimmed.startIndex, offsetBy: numWord.count)] == " " {
                     let numStr = String(numWord)
                     let itemText = String(lTrimmed.dropFirst(numWord.count + 1)).trimmingCharacters(in: .whitespaces)
                     listItems.append(OrderedListItem(number: numStr, text: itemText))
                     i += 1
-                } else if rawLine.hasPrefix("  ") && !listItems.isEmpty {
+                } else if (rawLine.hasPrefix(" ") || rawLine.hasPrefix("\t")) && !listItems.isEmpty {
                     let last = listItems.removeLast()
                     listItems.append(OrderedListItem(number: last.number, text: last.text + "\n" + lTrimmed))
                     i += 1
@@ -1015,11 +1037,11 @@ func parseMarkdown(_ input: String) -> [MarkdownBlock] {
         while i < count {
             let pLine = lines[i]
             let pTrimmed = pLine.trimmingCharacters(in: .whitespaces)
-            if pTrimmed.isEmpty || pTrimmed.hasPrefix("```") || pTrimmed.hasPrefix("#") || pTrimmed.hasPrefix(">") || pTrimmed.hasPrefix("- ") || pTrimmed.hasPrefix("* ") || pTrimmed.hasPrefix("• ") || (pTrimmed.hasPrefix("|") && pTrimmed.hasSuffix("|")) {
+            if pTrimmed.isEmpty || pTrimmed.hasPrefix("```") || pTrimmed.hasPrefix("#") || pTrimmed.hasPrefix(">") || pTrimmed.hasPrefix("- ") || pTrimmed.hasPrefix("* ") || pTrimmed.hasPrefix("• ") || pTrimmed.hasPrefix("+ ") || (pTrimmed.hasPrefix("|") && pTrimmed.hasSuffix("|")) {
                 break
             }
-            let firstW = pTrimmed.prefix(while: { $0.isNumber || $0 == "." })
-            if firstW.hasSuffix(".") && pTrimmed.count > firstW.count && pTrimmed[pTrimmed.index(pTrimmed.startIndex, offsetBy: firstW.count)] == " " {
+            let firstW = pTrimmed.prefix(while: { $0.isNumber || $0 == "." || $0 == ")" })
+            if (firstW.hasSuffix(".") || firstW.hasSuffix(")")) && pTrimmed.count > firstW.count && pTrimmed[pTrimmed.index(pTrimmed.startIndex, offsetBy: firstW.count)] == " " {
                 break
             }
             paraLines.append(pLine)
@@ -1081,6 +1103,8 @@ struct MarkdownInlineText: View {
     var body: some View {
         Text(attributed)
             .font(font)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
 }
@@ -1214,9 +1238,11 @@ struct MarkdownMessageView: View {
                         isUser: isUser,
                         font: level == 1 ? .title3.bold() : (level == 2 ? .headline.bold() : .subheadline.bold())
                     )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 2)
                 case .codeBlock(let language, let code):
                     MarkdownCodeBlockView(language: language, code: code, isUser: isUser)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 case .quote(let qText):
                     HStack(alignment: .top, spacing: 8) {
                         RoundedRectangle(cornerRadius: 1.5)
@@ -1224,39 +1250,50 @@ struct MarkdownMessageView: View {
                             .frame(width: 3)
                         MarkdownInlineText(text: qText, isUser: isUser)
                             .italic()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case .unorderedList(let items):
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         ForEach(0..<items.count, id: \.self) { itemIdx in
                             HStack(alignment: .top, spacing: 6) {
                                 Text("•")
                                     .font(.system(size: 14, weight: .bold))
                                     .foregroundColor(WhatsAppTheme.emerald)
                                 MarkdownInlineText(text: items[itemIdx], isUser: isUser)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case .orderedList(let items):
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         ForEach(items) { item in
                             HStack(alignment: .top, spacing: 6) {
                                 Text(item.number)
                                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                                     .foregroundColor(WhatsAppTheme.emerald)
                                 MarkdownInlineText(text: item.text, isUser: isUser)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let headers, let rows):
                     MarkdownTableView(headers: headers, rows: rows)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 case .divider:
                     Divider().padding(.vertical, 2)
                 case .paragraph(let pText):
                     MarkdownInlineText(text: pText, isUser: isUser)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1299,7 +1336,18 @@ struct ChatBubble: View {
                             .padding(.bottom, 1)
                     }
 
-                    MarkdownMessageView(text: bodyText, isUser: isUser)
+                    if bodyText.isEmpty && state.isBusy {
+                        // Subtle animated typing indicator while waiting for first tokens
+                        HStack(spacing: 4) {
+                            Circle().fill(Color.secondary.opacity(0.6)).frame(width: 5, height: 5)
+                            Circle().fill(Color.secondary.opacity(0.6)).frame(width: 5, height: 5)
+                            Circle().fill(Color.secondary.opacity(0.6)).frame(width: 5, height: 5)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 2)
+                    } else {
+                        MarkdownMessageView(text: bodyText, isUser: isUser)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 

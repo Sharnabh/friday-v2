@@ -131,9 +131,10 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
     public func executeRawChat(
         prompt: String,
         provider: String,
-        model: String
+        model: String,
+        onChunk: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
-        var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
+        var args = ["chat", "--format", "stream-json", "--reasoning", "none", "--ignore-rules"]
         if !provider.isEmpty { args += ["--provider", provider] }
         if !model.isEmpty { args += ["--model", model] }
         args += ["-q", prompt]
@@ -149,18 +150,37 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         process.standardError = stderrPipe
 
         var accumulated = ""
+        var resultText: String? = nil
+        var fallbackPlain = ""
         let outHandle = stdoutPipe.fileHandleForReading
         try process.run()
 
         for try await line in outHandle.bytes.lines {
-            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
-                continue
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("{") && trimmed.hasSuffix("}"),
+               let data = trimmed.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let type = json["type"] as? String {
+                if type == "text", let chunk = json["text"] as? String {
+                    accumulated += chunk
+                    onChunk?(chunk)
+                } else if type == "result", let text = json["text"] as? String {
+                    resultText = text
+                }
+            } else {
+                if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
+                    continue
+                }
+                if resultText == nil && accumulated.isEmpty {
+                    fallbackPlain += line + "\n"
+                    onChunk?(line + "\n")
+                }
             }
-            accumulated += line + "\n"
         }
 
         process.waitUntilExit()
-        return Self.cleanHermesOutput(accumulated)
+        let finalOutput = resultText ?? (accumulated.isEmpty ? fallbackPlain : accumulated)
+        return Self.cleanHermesOutput(finalOutput)
     }
 
     /// Context-aware turn orchestrator: decides which candidate bot(s) should speak given the conversation context and user message
@@ -235,9 +255,9 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         contextMemory: String,
         botName: String,
         botInstructions: String,
-        onChunk: @escaping @Sendable (String) -> Void
+        onChunk: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
-        var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
+        var args = ["chat", "--format", "stream-json", "--reasoning", "none", "--ignore-rules"]
         if !provider.isEmpty { args += ["--provider", provider] }
         if !model.isEmpty { args += ["--model", model] }
 
@@ -278,17 +298,33 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         process.standardError = stderrPipe
 
         var accumulated = ""
+        var resultText: String? = nil
+        var fallbackPlain = ""
         let outHandle = stdoutPipe.fileHandleForReading
 
         try process.run()
 
         for try await line in outHandle.bytes.lines {
-            // Strip out internal debug headers or session footer markers if present
-            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
-                continue
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("{") && trimmed.hasSuffix("}"),
+               let data = trimmed.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let type = json["type"] as? String {
+                if type == "text", let chunk = json["text"] as? String {
+                    accumulated += chunk
+                    onChunk?(chunk)
+                } else if type == "result", let text = json["text"] as? String {
+                    resultText = text
+                }
+            } else {
+                if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
+                    continue
+                }
+                if resultText == nil && accumulated.isEmpty {
+                    fallbackPlain += line + "\n"
+                    onChunk?(line + "\n")
+                }
             }
-            accumulated += line + "\n"
-            onChunk(line + "\n")
         }
 
         process.waitUntilExit()
@@ -296,7 +332,8 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         let errText = String(decoding: errData, as: UTF8.self)
 
-        let cleaned = Self.cleanBotReply(accumulated, botName: botName)
+        let finalOutput = resultText ?? (accumulated.isEmpty ? fallbackPlain : accumulated)
+        let cleaned = Self.cleanBotReply(finalOutput, botName: botName)
         if process.terminationStatus != 0 && cleaned.isEmpty {
             throw FridayError.message("Inference failed: " + errText)
         }
