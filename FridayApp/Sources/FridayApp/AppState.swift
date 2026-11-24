@@ -401,16 +401,25 @@ public final class AppState: ObservableObject {
                         for memberId in groupMembers {
                             let memberName = bots.first(where: { $0.id == memberId })?.name ?? "FRIDAY"
                             let memberInstr = bots.first(where: { $0.id == memberId })?.instructions ?? ""
+                            let prefix = memberId.isEmpty ? "" : "bot." + memberId + "."
+                            let botProvider = defaults.string(forKey: prefix + "chatProvider") ?? provider
+                            let botModel = defaults.string(forKey: prefix + "chatModel") ?? model
+                            
                             statusMessage = "\(memberName) is replying…"
-                            let memberReply = try await AssistantService.shared.streamChat(
-                                prompt: text,
-                                provider: provider,
-                                model: model,
-                                sessionID: sessionID,
-                                contextMemory: "",
-                                botName: memberName,
-                                botInstructions: memberInstr,
-                                onChunk: { _ in }
+                            
+                            let contextTurns = turns.suffix(16).joined(separator: "\n\n")
+                            let groupPrompt = """
+                            You are \(memberName) in a group conversation. Respond naturally and directly to the conversation topic in your own persona. Do not meta-explain your role or say "Understood, you've got me running as \(memberName)". Jump right into your thoughts and perspective.
+                            \(memberInstr.isEmpty ? "" : "Persona instructions: " + memberInstr)
+
+                            Group conversation so far:
+                            \(contextTurns)
+                            """
+
+                            let memberReply = try await AssistantService.shared.executeRawChat(
+                                prompt: groupPrompt,
+                                provider: botProvider,
+                                model: botModel
                             )
                             turns.append(memberName + "\n" + memberReply)
                             defaults.set(turns, forKey: key)

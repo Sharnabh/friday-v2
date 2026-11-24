@@ -34,6 +34,42 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         }
     }
 
+    /// Executes a clean, direct prompt without artificial wrapper templates
+    public func executeRawChat(
+        prompt: String,
+        provider: String,
+        model: String
+    ) async throws -> String {
+        var args = ["chat", "--quiet", "--reasoning", "none"]
+        if !provider.isEmpty { args += ["--provider", provider] }
+        if !model.isEmpty { args += ["--model", model] }
+        args += ["-q", prompt]
+
+        let hermesPath = NSHomeDirectory() + "/.local/bin/hermes"
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: hermesPath)
+        process.arguments = args
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        var accumulated = ""
+        let outHandle = stdoutPipe.fileHandleForReading
+        try process.run()
+
+        for try await line in outHandle.bytes.lines {
+            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") {
+                continue
+            }
+            accumulated += line + "\n"
+        }
+
+        process.waitUntilExit()
+        return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Executes inference with streaming callback chunks
     public func streamChat(
         prompt: String,
