@@ -280,6 +280,17 @@ public final class AppState: ObservableObject {
         inputMessage = words.joined(separator: " ") + " "
     }
 
+    public func latestSnippet(for botId: String) -> String {
+        let prefix = botId.isEmpty ? "" : "bot." + botId + "."
+        let sessId = defaults.string(forKey: prefix + "fridaySession") ?? ""
+        if !sessId.isEmpty, let turns = defaults.stringArray(forKey: prefix + "transcript." + sessId), let last = turns.last {
+            let lines = last.components(separatedBy: "\n")
+            let content = lines.dropFirst().joined(separator: " ")
+            return content.isEmpty ? "Tap to chat" : String(content.prefix(32))
+        }
+        return "Tap to chat"
+    }
+
     public func deleteBot(id: String) {
         guard !id.isEmpty else { return }
         var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
