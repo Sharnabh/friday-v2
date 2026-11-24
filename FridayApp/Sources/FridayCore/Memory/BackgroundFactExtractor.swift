@@ -49,6 +49,13 @@ public final class WorkingMemoryCache: @unchecked Sendable {
         cache.removeAll()
         keysOrder.removeAll()
     }
+
+    public func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeAll()
+        keysOrder.removeAll()
+    }
 }
 
 /// Asynchronous background fact and graph triple extractor (zero user latency)

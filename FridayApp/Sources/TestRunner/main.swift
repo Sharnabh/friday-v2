@@ -112,6 +112,38 @@ struct TestRunner {
             assert(!kiaraMemories.isEmpty && kiaraMemories[0].body.contains("Sharnabh"), "Kiara must find user's name from shared memory")
             print("   Kiara retrieved memory: '\(kiaraMemories[0].body)'")
 
+            // 7. Test Scope Filtering, Deletion, and Clearing
+            print("\n[Step 7] Testing Scope 'all', Single Delete, and Clear All...")
+            let allMemories = try store.search("", scope: "all", limit: 100)
+            print("   All memories count across all scopes: \(allMemories.count)")
+            assert(allMemories.count >= 4, "Should find all memories across shared and private scopes")
+
+            let allTriples = try store.listTriples(scope: "all")
+            print("   All graph triples count: \(allTriples.count)")
+            assert(!allTriples.isEmpty, "Should list all triples")
+
+            // Delete single triple
+            let tripleToDelete = allTriples[0]
+            try store.deleteTriple(id: tripleToDelete.id)
+            let updatedTriples = try store.listTriples(scope: "all")
+            assert(updatedTriples.count == allTriples.count - 1, "Triple count should decrease by 1")
+            print("   Successfully deleted triple id: \(tripleToDelete.id)")
+
+            // Delete single memory
+            let memoryToDelete = allMemories[0]
+            try store.remove(memoryToDelete)
+            let remainingMemories = try store.search("", scope: "all", limit: 100)
+            assert(remainingMemories.count == allMemories.count - 1, "Memory count should decrease by 1")
+            print("   Successfully deleted memory id: \(memoryToDelete.id)")
+
+            // Clear all
+            try store.clearAll(scope: "all")
+            let clearedMemories = try store.search("", scope: "all", limit: 100)
+            let clearedTriples = try store.listTriples(scope: "all")
+            assert(clearedMemories.isEmpty, "Memories should be empty after clearAll")
+            assert(clearedTriples.isEmpty, "Triples should be empty after clearAll")
+            print("   Successfully cleared all memories and triples")
+
             print("\n==================================================")
             print("  ALL MEMORY UPGRADES VERIFIED AND PASSED (100%)  ")
             print("==================================================")

@@ -221,6 +221,19 @@ struct ContentView: View {
                                         isCore: false
                                     )
                                 }
+                                .contextMenu {
+                                    Button {
+                                        state.openGroupEditor(groupId: group.id)
+                                    } label: {
+                                        Label("Manage Group Members…", systemImage: "person.2.badge.gearshape")
+                                    }
+                                    Divider()
+                                    Button(role: .destructive) {
+                                        state.deleteGroup(id: group.id)
+                                    } label: {
+                                        Label("Delete Group", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
@@ -376,6 +389,9 @@ struct ContentView: View {
             .padding()
             .frame(width: 460)
         }
+        .sheet(isPresented: $state.showEditGroupModal) {
+            EditGroupModalView()
+        }
     }
 
     private var filteredBots: [BotProfile] {
@@ -478,9 +494,19 @@ struct ChatView: View {
                             .font(.system(size: 12))
                             .foregroundColor(WhatsAppTheme.emerald)
                     } else if state.isGroupSelected {
-                        Text("\(state.groupMembers.count) participants")
+                        Button {
+                            state.openGroupEditor(groupId: state.activeBotId)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("\(state.groupMembers.count) participants")
+                                Image(systemName: "pencil.circle")
+                                    .font(.system(size: 11))
+                            }
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Manage Group Members")
                     } else {
                         Text("online")
                             .font(.system(size: 12))
@@ -504,8 +530,18 @@ struct ChatView: View {
                     }
                 }
 
-                // Edit Persona Action
-                if !state.isGroupSelected {
+                // Edit Persona or Manage Group Action
+                if state.isGroupSelected {
+                    Button {
+                        state.openGroupEditor(groupId: state.activeBotId)
+                    } label: {
+                        Image(systemName: "person.2.badge.gearshape")
+                            .font(.system(size: 15))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Manage Group Members & Settings")
+                } else {
                     Button {
                         state.openPersonaEditor()
                     } label: {
@@ -1248,68 +1284,404 @@ struct ChatBubble: View {
 
 // MARK: - Workspaces (Memory & Reminders)
 
-struct MemoryView: View {
+struct EditGroupModalView: View {
     @EnvironmentObject var state: AppState
-    @State private var searchQuery = ""
-    @State private var newMemoryText = ""
-    @State private var isShared = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Hybrid Memory Vault (FTS5 + Dense Embeddings)")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Manage Multi-Bot Group")
+                    .font(.headline)
+                Spacer()
+                Button(role: .destructive) {
+                    state.deleteGroup(id: state.editingGroupId)
+                    state.showEditGroupModal = false
+                } label: {
+                    Label("Delete Group", systemImage: "trash")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Group Name")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Group Name", text: $state.editingGroupName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Group Members (\(state.editingGroupMembers.count))")
+                    .font(.subheadline.weight(.semibold))
+
+                Text("Select participating bots:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                List {
+                    ForEach([""] + state.bots.map { $0.id }, id: \.self) { botId in
+                        let name = botId.isEmpty ? state.fridayName : (state.bots.first(where: { $0.id == botId })?.name ?? "FRIDAY")
+                        HStack {
+                            ZStack {
+                                Circle()
+                                    .fill(botId.isEmpty ? WhatsAppTheme.emerald : avatarColor(for: name))
+                                    .frame(width: 28, height: 28)
+                                if botId.isEmpty {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.white)
+                                } else {
+                                    Text(avatarInitials(for: name))
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(.white)
+                                }
+                            }
+
+                            Text(name)
+                                .font(.system(size: 13, weight: .medium))
+
+                            Spacer()
+
+                            Toggle("", isOn: Binding(
+                                get: { state.editingGroupMembers.contains(botId) },
+                                set: { on in
+                                    if on {
+                                        state.editingGroupMembers.insert(botId)
+                                    } else {
+                                        state.editingGroupMembers.remove(botId)
+                                    }
+                                }
+                            ))
+                            .labelsHidden()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .frame(height: 180)
+                .background(Color.secondary.opacity(0.05))
+                .cornerRadius(8)
+            }
+
+            if state.editingGroupMembers.count < 2 {
+                Text("A multi-bot group requires at least 2 members.")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
             HStack {
-                TextField("Search memories with semantic or exact text…", text: $searchQuery)
-                    .textFieldStyle(.roundedBorder)
+                Spacer()
+                Button("Cancel") {
+                    state.showEditGroupModal = false
+                }
+                Button("Save Changes") {
+                    state.updateGroup(
+                        id: state.editingGroupId,
+                        name: state.editingGroupName,
+                        memberIds: Array(state.editingGroupMembers)
+                    )
+                    state.showEditGroupModal = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(state.editingGroupName.trimmingCharacters(in: .whitespaces).isEmpty || state.editingGroupMembers.count < 2)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+}
+
+struct MemoryCardRow: View {
+    let entry: MemoryEntry
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(entry.scope.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(entry.scope == "shared" ? WhatsAppTheme.emerald : .blue)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background((entry.scope == "shared" ? WhatsAppTheme.emerald : Color.blue).opacity(0.15))
+                    .cornerRadius(4)
+
+                Text(entry.source)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                if let sim = entry.similarity {
+                    Text(String(format: "Cosine: %.2f", sim))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundColor(.red.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .help("Delete this memory permanently")
+            }
+
+            Text(entry.body)
+                .font(.system(size: 13))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct GraphTripleCardRow: View {
+    let triple: GraphTriple
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(triple.scope.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(triple.scope == "shared" ? WhatsAppTheme.emerald : .blue)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background((triple.scope == "shared" ? WhatsAppTheme.emerald : Color.blue).opacity(0.15))
+                .cornerRadius(4)
+
+            HStack(spacing: 6) {
+                Text(triple.subject)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .cornerRadius(4)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+
+                Text(triple.predicate)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(WhatsAppTheme.emerald)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(WhatsAppTheme.emerald.opacity(0.1))
+                    .cornerRadius(4)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+
+                Text(triple.object)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .cornerRadius(4)
+            }
+
+            Spacer()
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+                    .foregroundColor(.red.opacity(0.85))
+            }
+            .buttonStyle(.plain)
+            .help("Delete this knowledge relation")
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct MemoryView: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.colorScheme) var colorScheme
+    @State private var searchQuery = ""
+    @State private var newMemoryText = ""
+    @State private var isShared = true
+    @State private var selectedTab: Int = 0
+    @State private var showClearAlert = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Memory Vault")
+                        .font(.system(size: 20, weight: .bold))
+                    Text("Long-Term Memory: Hybrid FTS5 + Apple Accelerate Vectors + GraphRAG Triples")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button(role: .destructive) {
+                    showClearAlert = true
+                } label: {
+                    Label("Clear Memories", systemImage: "trash")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .disabled(state.memories.isEmpty && state.graphTriples.isEmpty)
+                .help("Clear memories for current scope")
+            }
+
+            // Scope Filter & Category Tabs
+            HStack(spacing: 12) {
+                Picker("Scope", selection: $state.selectedMemoryScope) {
+                    Text("All Scopes").tag("all")
+                    Text("Shared Only").tag("shared")
+                    Text("Current Chat").tag("current")
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+                .onChange(of: state.selectedMemoryScope) { _, _ in
+                    state.loadMemories(query: searchQuery)
+                }
+
+                Spacer()
+
+                Picker("", selection: $selectedTab) {
+                    Text("Durable Facts (\(state.memories.count))").tag(0)
+                    Text("Knowledge Triples (\(state.graphTriples.count))").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+            }
+
+            // Live Search Bar
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search memories using keywords, semantic questions, or entities…", text: $searchQuery)
+                    .textFieldStyle(.plain)
                     .onChange(of: searchQuery) { _, query in
                         state.loadMemories(query: query)
                     }
-                Button("Search") {
-                    state.loadMemories(query: searchQuery)
-                }
-            }
-
-            HStack {
-                TextField("Add new durable fact / preference…", text: $newMemoryText)
-                    .textFieldStyle(.roundedBorder)
-                Toggle("Shared", isOn: $isShared)
-                Button("Save Memory") {
-                    if !newMemoryText.isEmpty {
-                        state.saveMemory(body: newMemoryText, isShared: isShared)
-                        newMemoryText = ""
-                    }
-                }
-            }
-
-            List(state.memories) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(item.scope.capitalized)
-                            .font(.caption)
-                            .padding(3)
-                            .background(Color.secondary.opacity(0.2))
-                            .cornerRadius(4)
-                        if let sim = item.similarity {
-                            Text(String(format: "Cosine: %.2f", sim))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Text(item.source)
-                            .font(.caption2)
+                if !searchQuery.isEmpty {
+                    Button {
+                        searchQuery = ""
+                        state.loadMemories(query: "")
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
                     }
-                    Text(item.body)
-                        .font(.body)
+                    .buttonStyle(.plain)
                 }
-                .padding(.vertical, 4)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
+            .cornerRadius(8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
+
+            // Add Memory Bar
+            HStack(spacing: 10) {
+                Image(systemName: "plus.circle")
+                    .foregroundColor(WhatsAppTheme.emerald)
+                TextField("Add new durable fact or preference…", text: $newMemoryText)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        saveNewMemory()
+                    }
+                Toggle("Shared", isOn: $isShared)
+                    .toggleStyle(.checkbox)
+                    .help("Shared makes this fact available to all bots")
+                Button("Save Fact") {
+                    saveNewMemory()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(WhatsAppTheme.emerald)
+                .disabled(newMemoryText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.06))
+            .cornerRadius(8)
+
+            Divider()
+
+            // Main Content Area
+            if selectedTab == 0 {
+                if state.memories.isEmpty {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "brain")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text(searchQuery.isEmpty ? "No memories stored for this scope." : "No memories matching '\(searchQuery)'.")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(state.memories) { item in
+                            MemoryCardRow(entry: item) {
+                                state.deleteMemory(item)
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                }
+            } else {
+                if state.graphTriples.isEmpty {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("No relational knowledge graph facts found for this scope.")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(state.graphTriples) { triple in
+                            GraphTripleCardRow(triple: triple) {
+                                state.deleteTriple(triple)
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                }
             }
         }
-        .padding()
+        .padding(16)
         .onAppear {
-            state.loadMemories()
+            state.loadMemories(query: searchQuery)
         }
+        .confirmationDialog(
+            "Clear Memories",
+            isPresented: $showClearAlert,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All in Scope '\(state.selectedMemoryScope.capitalized)'", role: .destructive) {
+                state.clearAllMemories()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete these memories? This will permanently remove them from SQLite.")
+        }
+    }
+
+    private func saveNewMemory() {
+        let clean = newMemoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        state.saveMemory(body: clean, isShared: isShared)
+        newMemoryText = ""
     }
 }
 

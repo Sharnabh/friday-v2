@@ -316,6 +316,100 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
     }
 
+    public func remove(id: Int64) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try write("DELETE FROM memories WHERE rowid=?", [String(id)])
+            try write("DELETE FROM memory_vectors WHERE rowid=?", [String(id)])
+            try write("DELETE FROM memory_metadata WHERE rowid=?", [String(id)])
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func deleteTriple(id: Int64) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try write("DELETE FROM graph_triples WHERE id=?", [String(id)])
+    }
+
+    public func listTriples(scope: String = "all", limit: Int = 100) throws -> [GraphTriple] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var sql = "SELECT id, scope, subject, predicate, object, confidence, created_at FROM graph_triples"
+        var args = [String]()
+
+        if scope == "all" {
+            sql += " ORDER BY id DESC LIMIT ?"
+            args.append(String(limit))
+        } else if scope == "shared" {
+            sql += " WHERE scope = 'shared' ORDER BY id DESC LIMIT ?"
+            args.append(String(limit))
+        } else {
+            sql += " WHERE scope IN ('shared', ?) ORDER BY id DESC LIMIT ?"
+            args.append(scope)
+            args.append(String(limit))
+        }
+
+        let stmt = try statement(sql, args)
+        defer { sqlite3_finalize(stmt) }
+
+        var results = [GraphTriple]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let sScope = String(cString: sqlite3_column_text(stmt, 1))
+            let sub = String(cString: sqlite3_column_text(stmt, 2))
+            let pred = String(cString: sqlite3_column_text(stmt, 3))
+            let obj = String(cString: sqlite3_column_text(stmt, 4))
+            let conf = sqlite3_column_double(stmt, 5)
+            let created = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+            results.append(GraphTriple(id: id, scope: sScope, subject: sub, predicate: pred, object: obj, confidence: conf, createdAt: created))
+        }
+        return results
+    }
+
+    public func clearAll(scope: String = "all") throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try exec("BEGIN IMMEDIATE")
+        do {
+            if scope == "all" {
+                try exec("""
+                DELETE FROM memories;
+                DELETE FROM memory_vectors;
+                DELETE FROM memory_metadata;
+                DELETE FROM graph_triples;
+                """)
+            } else if scope == "shared" {
+                try exec("""
+                DELETE FROM memory_vectors WHERE rowid IN (SELECT rowid FROM memories WHERE scope = 'shared');
+                DELETE FROM memory_metadata WHERE rowid IN (SELECT rowid FROM memories WHERE scope = 'shared');
+                DELETE FROM memories WHERE scope = 'shared';
+                DELETE FROM graph_triples WHERE scope = 'shared';
+                """)
+            } else {
+                try write("""
+                DELETE FROM memory_vectors WHERE rowid IN (SELECT rowid FROM memories WHERE scope = ?);
+                DELETE FROM memory_metadata WHERE rowid IN (SELECT rowid FROM memories WHERE scope = ?);
+                DELETE FROM memories WHERE scope = ?;
+                DELETE FROM graph_triples WHERE scope = ?;
+                """, [scope, scope, scope, scope])
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
     // MARK: - Stanford Generative Agents Composite Search
 
     public func search(_ query: String, scope: String, limit: Int = 100, pinnedOnly: Bool = false) throws -> [MemoryEntry] {
@@ -394,9 +488,16 @@ public final class HybridMemoryStore: @unchecked Sendable {
                COALESCE(d.importance, 5), COALESCE(d.created_at, 0), COALESCE(d.last_accessed_at, 0)
         FROM memories m
         LEFT JOIN memory_metadata d ON m.rowid = d.rowid
-        WHERE m.scope IN ('shared', ?)
         """
-        var args = [scope]
+        var args = [String]()
+        if scope == "all" {
+            sql += " WHERE 1=1"
+        } else if scope == "shared" {
+            sql += " WHERE m.scope = 'shared'"
+        } else {
+            sql += " WHERE m.scope IN ('shared', ?)"
+            args.append(scope)
+        }
         if pinnedOnly { sql += " AND m.pinned='1'" }
 
         if !tokens.isEmpty {
@@ -431,19 +532,30 @@ public final class HybridMemoryStore: @unchecked Sendable {
 
     private func vdspVectorSearch(_ queryVector: [Float], scope: String, limit: Int) throws -> [MemoryEntry] {
         var stmt: OpaquePointer?
-        let sql = """
+        var sql = """
         SELECT m.rowid, m.scope, m.body, m.source, m.revision, 
                COALESCE(d.importance, 5), COALESCE(d.created_at, 0), COALESCE(d.last_accessed_at, 0), v.vector 
         FROM memories m
         JOIN memory_vectors v ON m.rowid = v.rowid
         LEFT JOIN memory_metadata d ON m.rowid = d.rowid
-        WHERE m.scope IN ('shared', ?)
         """
+        var args = [String]()
+        if scope == "all" {
+            sql += " WHERE 1=1"
+        } else if scope == "shared" {
+            sql += " WHERE m.scope = 'shared'"
+        } else {
+            sql += " WHERE m.scope IN ('shared', ?)"
+            args.append(scope)
+        }
+
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
             throw failure()
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, scope, -1, Self.transient)
+        for (i, arg) in args.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), arg, -1, Self.transient)
+        }
 
         var scored = [(entry: MemoryEntry, score: Float)]()
         while sqlite3_step(stmt) == SQLITE_ROW {

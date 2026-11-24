@@ -33,7 +33,9 @@ public final class AppState: ObservableObject {
     @Published public var savedSessions: [ChatSessionItem] = []
     
     // Memory & Reminders
+    @Published public var selectedMemoryScope: String = "all" // "all", "shared", "current"
     @Published public var memories: [MemoryEntry] = []
+    @Published public var graphTriples: [GraphTriple] = []
     @Published public var reminders: [Reminder] = []
     @Published public var activities: [ActivityEntry] = []
 
@@ -42,6 +44,12 @@ public final class AppState: ObservableObject {
     @Published public var editingBotId: String = ""
     @Published public var editingBotName: String = ""
     @Published public var editingBotInstructions: String = ""
+
+    // Group Editing & Member Management
+    @Published public var showEditGroupModal: Bool = false
+    @Published public var editingGroupId: String = ""
+    @Published public var editingGroupName: String = ""
+    @Published public var editingGroupMembers: Set<String> = []
 
     public var memoryStore: HybridMemoryStore?
     public var reminderService: ReminderService
@@ -299,8 +307,25 @@ public final class AppState: ObservableObject {
         var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
         current.removeValue(forKey: id)
         defaults.set(current, forKey: "fridayBots")
+
+        // Remove from all existing groups so no group retains deleted member
+        if let groupData = defaults.data(forKey: "namedGroups"),
+           var groupMap = try? JSONDecoder().decode([String: BotGroup].self, from: groupData) {
+            for (gId, var g) in groupMap {
+                if g.members.contains(id) {
+                    g.members.removeAll(where: { $0 == id })
+                    groupMap[gId] = g
+                }
+            }
+            if let data = try? JSONEncoder().encode(groupMap) {
+                defaults.set(data, forKey: "namedGroups")
+            }
+        }
+
         loadBotsAndGroups()
-        selectBot("")
+        if activeBotId == id {
+            selectBot("")
+        }
         self.statusMessage = "Deleted bot"
     }
 
@@ -377,6 +402,59 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func openGroupEditor(groupId: String) {
+        guard let grp = groups.first(where: { $0.id == groupId }) else { return }
+        editingGroupId = grp.id
+        editingGroupName = grp.name
+        editingGroupMembers = Set(grp.members)
+        showEditGroupModal = true
+    }
+
+    public func updateGroup(id: String, name: String, memberIds: [String]) {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { return }
+        guard let groupData = defaults.data(forKey: "namedGroups"),
+              var groupMap = try? JSONDecoder().decode([String: BotGroup].self, from: groupData),
+              var grp = groupMap[id] else { return }
+        grp.name = cleanName
+        grp.members = memberIds
+        groupMap[id] = grp
+        if let data = try? JSONEncoder().encode(groupMap) {
+            defaults.set(data, forKey: "namedGroups")
+            loadBotsAndGroups()
+            self.statusMessage = "Updated group \(cleanName)"
+        }
+    }
+
+    public func deleteGroup(id: String) {
+        guard !id.isEmpty else { return }
+        if let groupData = defaults.data(forKey: "namedGroups"),
+           var groupMap = try? JSONDecoder().decode([String: BotGroup].self, from: groupData) {
+            groupMap.removeValue(forKey: id)
+            if let data = try? JSONEncoder().encode(groupMap) {
+                defaults.set(data, forKey: "namedGroups")
+            }
+        }
+        loadBotsAndGroups()
+        if activeBotId == id {
+            selectBot("")
+        }
+        self.statusMessage = "Group deleted"
+    }
+
+    public func removeBotFromGroup(botId: String, groupId: String) {
+        guard let groupData = defaults.data(forKey: "namedGroups"),
+              var groupMap = try? JSONDecoder().decode([String: BotGroup].self, from: groupData),
+              var grp = groupMap[groupId] else { return }
+        grp.members.removeAll(where: { $0 == botId })
+        groupMap[groupId] = grp
+        if let data = try? JSONEncoder().encode(groupMap) {
+            defaults.set(data, forKey: "namedGroups")
+            loadBotsAndGroups()
+            self.statusMessage = "Removed bot from group"
+        }
+    }
+
     public var sessionID: String {
         if !currentSessionId.isEmpty { return currentSessionId }
         if let id = defaults.string(forKey: activeBotScope + "fridaySession") {
@@ -391,10 +469,66 @@ public final class AppState: ObservableObject {
 
     public func loadMemories(query: String = "") {
         guard let store = memoryStore else { return }
+        let effScope: String
+        switch selectedMemoryScope {
+        case "all": effScope = "all"
+        case "shared": effScope = "shared"
+        default: effScope = memoryScope
+        }
         do {
-            self.memories = try store.search(query, scope: memoryScope, limit: 50)
+            self.memories = try store.search(query, scope: effScope, limit: 100)
+            self.graphTriples = try store.listTriples(scope: effScope, limit: 100)
         } catch {
             self.statusMessage = "Search error: \(error.localizedDescription)"
+        }
+    }
+
+    public func deleteMemory(_ entry: MemoryEntry) {
+        guard let store = memoryStore else { return }
+        do {
+            try store.remove(entry)
+            WorkingMemoryCache.shared.clear()
+            loadMemories()
+            self.statusMessage = "Memory deleted"
+        } catch {
+            do {
+                try store.remove(id: entry.id)
+                WorkingMemoryCache.shared.clear()
+                loadMemories()
+                self.statusMessage = "Memory deleted"
+            } catch {
+                self.statusMessage = "Delete error: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    public func deleteTriple(_ triple: GraphTriple) {
+        guard let store = memoryStore else { return }
+        do {
+            try store.deleteTriple(id: triple.id)
+            WorkingMemoryCache.shared.clear()
+            loadMemories()
+            self.statusMessage = "Relational fact deleted"
+        } catch {
+            self.statusMessage = "Delete error: \(error.localizedDescription)"
+        }
+    }
+
+    public func clearAllMemories() {
+        guard let store = memoryStore else { return }
+        let effScope: String
+        switch selectedMemoryScope {
+        case "all": effScope = "all"
+        case "shared": effScope = "shared"
+        default: effScope = memoryScope
+        }
+        do {
+            try store.clearAll(scope: effScope)
+            WorkingMemoryCache.shared.clear()
+            loadMemories()
+            self.statusMessage = "Cleared memories for scope: \(selectedMemoryScope)"
+        } catch {
+            self.statusMessage = "Clear error: \(error.localizedDescription)"
         }
     }
 
