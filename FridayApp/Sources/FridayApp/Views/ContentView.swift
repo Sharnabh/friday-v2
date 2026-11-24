@@ -16,7 +16,14 @@ struct ContentView: View {
             List(selection: $state.activeBotId) {
                 Section("Assistant") {
                     NavigationLink(value: "") {
-                        Label("FRIDAY (Core)", systemImage: "sparkles")
+                        Label("\(state.fridayName) (Core)", systemImage: "sparkles")
+                    }
+                    .contextMenu {
+                        Button {
+                            state.openPersonaEditor(for: "")
+                        } label: {
+                            Label("Edit Persona & Instructions…", systemImage: "slider.horizontal.3")
+                        }
                     }
                 }
 
@@ -25,6 +32,19 @@ struct ContentView: View {
                         ForEach(state.bots) { bot in
                             NavigationLink(value: bot.id) {
                                 Label(bot.name, systemImage: "person.circle")
+                            }
+                            .contextMenu {
+                                Button {
+                                    state.openPersonaEditor(for: bot.id)
+                                } label: {
+                                    Label("Edit Persona & Instructions…", systemImage: "slider.horizontal.3")
+                                }
+                                Divider()
+                                Button(role: .destructive) {
+                                    state.deleteBot(id: bot.id)
+                                } label: {
+                                    Label("Delete Bot", systemImage: "trash")
+                                }
                             }
                         }
                     }
@@ -59,7 +79,7 @@ struct ContentView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationTitle("FRIDAY")
+            .navigationTitle(state.fridayName)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -157,6 +177,57 @@ struct ContentView: View {
             .padding()
             .frame(width: 420)
         }
+        .sheet(isPresented: $state.showEditPersonaModal) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(state.editingBotId.isEmpty ? "Edit Core Assistant Persona" : "Edit Assistant Persona")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Persona Name")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("Bot Name", text: $state.editingBotName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("System Instructions & Tone")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextEditor(text: $state.editingBotInstructions)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 120, maxHeight: 220)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                }
+
+                HStack {
+                    if !state.editingBotId.isEmpty {
+                        Button(role: .destructive) {
+                            state.deleteBot(id: state.editingBotId)
+                            state.showEditPersonaModal = false
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+
+                    Spacer()
+
+                    Button("Cancel") { state.showEditPersonaModal = false }
+                    Button("Save Changes") {
+                        state.updateBot(
+                            id: state.editingBotId,
+                            name: state.editingBotName,
+                            instructions: state.editingBotInstructions
+                        )
+                        state.showEditPersonaModal = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(state.editingBotName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding()
+            .frame(width: 460)
+        }
     }
 }
 
@@ -169,6 +240,18 @@ struct ChatView: View {
             HStack(spacing: 12) {
                 Text(state.currentBotDisplayName)
                     .font(.headline)
+
+                if !state.isGroupSelected {
+                    Button {
+                        state.openPersonaEditor()
+                    } label: {
+                        Label("Edit Persona", systemImage: "slider.horizontal.3")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.accentColor)
+                    .help("Edit Persona Name & System Instructions")
+                }
 
                 Spacer()
 

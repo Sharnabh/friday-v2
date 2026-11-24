@@ -37,6 +37,12 @@ public final class AppState: ObservableObject {
     @Published public var reminders: [Reminder] = []
     @Published public var activities: [ActivityEntry] = []
 
+    // Persona & Instructions Editing
+    @Published public var showEditPersonaModal: Bool = false
+    @Published public var editingBotId: String = ""
+    @Published public var editingBotName: String = ""
+    @Published public var editingBotInstructions: String = ""
+
     public var memoryStore: HybridMemoryStore?
     public var reminderService: ReminderService
     public var activityService: ActivityService
@@ -162,15 +168,81 @@ public final class AppState: ObservableObject {
         self.statusMessage = "Switched to \(currentBotDisplayName)"
     }
 
-    public var currentBotDisplayName: String {
+    public var fridayName: String {
+        let name = defaults.string(forKey: "fridayCustomName")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "FRIDAY" : name
+    }
+
+    public var fridayInstructions: String {
+        defaults.string(forKey: "fridayCustomInstructions") ?? ""
+    }
+
+    public var currentBotName: String {
         if isGroupSelected {
             return groups.first(where: { $0.id == activeBotId })?.name ?? "Group Chat"
         }
-        return bots.first(where: { $0.id == activeBotId })?.name ?? "FRIDAY"
+        if activeBotId.isEmpty {
+            return fridayName
+        }
+        return bots.first(where: { $0.id == activeBotId })?.name ?? "Bot"
+    }
+
+    public var currentBotInstructions: String {
+        if activeBotId.isEmpty {
+            return fridayInstructions
+        }
+        return bots.first(where: { $0.id == activeBotId })?.instructions ?? ""
+    }
+
+    public var currentBotDisplayName: String {
+        currentBotName
     }
 
     public func selectBot(_ id: String) {
         activeBotId = id
+    }
+
+    public func updateBot(id: String, name: String, instructions: String) {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty {
+            // Updating Core Friday
+            defaults.set(cleanName.isEmpty ? "FRIDAY" : cleanName, forKey: "fridayCustomName")
+            defaults.set(instructions, forKey: "fridayCustomInstructions")
+            objectWillChange.send()
+            self.statusMessage = "Updated \(fridayName) persona"
+        } else {
+            // Updating custom bot
+            var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
+            current[id] = ["name": cleanName.isEmpty ? "Bot" : cleanName, "instructions": instructions]
+            defaults.set(current, forKey: "fridayBots")
+            loadBotsAndGroups()
+            self.statusMessage = "Updated \(cleanName)"
+        }
+    }
+
+    public func openPersonaEditor(for botId: String? = nil) {
+        let targetId = botId ?? activeBotId
+        if targetId.isEmpty {
+            editingBotId = ""
+            editingBotName = fridayName
+            editingBotInstructions = fridayInstructions
+            showEditPersonaModal = true
+        } else if let b = bots.first(where: { $0.id == targetId }) {
+            editingBotId = b.id
+            editingBotName = b.name
+            editingBotInstructions = b.instructions
+            showEditPersonaModal = true
+        }
+    }
+
+    public func deleteBot(id: String) {
+        guard !id.isEmpty else { return }
+        var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
+        current.removeValue(forKey: id)
+        defaults.set(current, forKey: "fridayBots")
+        loadBotsAndGroups()
+        selectBot("")
+        self.statusMessage = "Deleted bot"
     }
 
     public func newChat() {
@@ -329,8 +401,8 @@ public final class AppState: ObservableObject {
                     model: model
                 )
 
-                let botName = bots.first(where: { $0.id == activeBotId })?.name ?? "FRIDAY"
-                let botInstr = bots.first(where: { $0.id == activeBotId })?.instructions ?? ""
+                let botName = currentBotName
+                let botInstr = currentBotInstructions
 
                 // 2. Action or Chat Dispatch
                 var reply = ""
@@ -399,8 +471,8 @@ public final class AppState: ObservableObject {
                     if isGroupSelected {
                         // Multi-Bot Group Conversation
                         for memberId in groupMembers {
-                            let memberName = bots.first(where: { $0.id == memberId })?.name ?? "FRIDAY"
-                            let memberInstr = bots.first(where: { $0.id == memberId })?.instructions ?? ""
+                            let memberName = memberId.isEmpty ? fridayName : (bots.first(where: { $0.id == memberId })?.name ?? "FRIDAY")
+                            let memberInstr = memberId.isEmpty ? fridayInstructions : (bots.first(where: { $0.id == memberId })?.instructions ?? "")
                             let prefix = memberId.isEmpty ? "" : "bot." + memberId + "."
                             let botProvider = defaults.string(forKey: prefix + "chatProvider") ?? provider
                             let botModel = defaults.string(forKey: prefix + "chatModel") ?? model
