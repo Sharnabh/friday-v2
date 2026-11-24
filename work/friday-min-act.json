@@ -1,0 +1,9 @@
+{
+  "delivery": {
+    "mode": "background"
+  },
+  "effect": "unverifiable",
+  "hint": "The click was sent but nothing confirmed it. Read what changed before clicking again; a repeat can toggle or double-fire.",
+  "route": "accessibility",
+  "summary": "Sent, effect not verified: Performed AXPress on [4] AXMenuBarItem \"Edit\"."
+}

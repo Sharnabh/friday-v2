@@ -1,0 +1,29 @@
+{
+  "app_name": "Calculator",
+  "capture_id": "capture_7165ee0d27664844bc0f6bf5231108a3_0000000000000000",
+  "element_count": 21,
+  "elements_complete": false,
+  "pid": 18451,
+  "returned_element_count": 21,
+  "screenshot_frame_valid": true,
+  "screenshot_height": 204,
+  "screenshot_mime_type": "image/png",
+  "screenshot_scale": 2.0,
+  "screenshot_width": 78,
+  "snapshot_id": "s00000001",
+  "timeout_ms": 1000,
+  "total_element_count": 21,
+  "tree_format": "markdown",
+  "tree_markdown": "- [0] AXWindow \"Calculator\" [id=main actions=[raise]]\n    - AXScrollArea (Input)\n      - AXStaticText = \"‎4.59‎+‎4.59‎+‎12.09‎+‎17.69‎+‎16.39\"\n    - [1] AXButton (Delete) [id=Delete help=\"Delete the last digit or operation entered (long press to delete all)\" actions=[press]]\n    - [2] AXButton (Change Sign) [id=Negate help=\"Change sign of a value\" actions=[press]]\n    - [3] AXButton (Per cent) [id=Percent actions=[press]]\n    - [4] AXButton (Divide) [id=Divide actions=[press]]\n    - [5] AXButton (7) [id=Seven actions=[press]]\n    - [6] AXButton (8) [id=Eight actions=[press]]\n    - [7] AXButton (9) [id=Nine actions=[press]]\n    - [8] AXButton (Multiply) [id=Multiply actions=[press]]\n    - [9] AXButton (4) [id=Four actions=[press]]\n    - [10] AXButton (5) [id=Five actions=[press]]\n    - [11] AXButton (6) [id=Six actions=[press]]\n    - [12] AXButton (Subtract) [id=Subtract actions=[press]]\n    - [13] AXButton (1) [id=One actions=[press]]\n    - [14] AXButton (2) [id=Two actions=[press]]\n    - [15] AXButton (3) [id=Three actions=[press]]\n    - [16] AXButton (Add) [id=Add actions=[press]]\n    - [17] AXButton (0) [id=Zero actions=[press]]\n    - [18] AXButton (Point) [id=Decimal actions=[press]]\n    - [19] AXButton (Equals) [id=Equals actions=[press]]\n    - AXGroup (Change Mode)\n      - [20] AXMenuButton (calculator.fill) [id=calculator.fill help=\"Change Calculator mode\"]\n\n⚠️ PARTIAL TREE: the max_elements node budget ran out after 30 node(s) (6 discovered but not visited). Every element listed is real; elements after the cut are missing. If the element you need is absent, retry with a larger max_elements or narrow with query / max_depth.",
+  "truncated": true,
+  "truncation_hint": "Tree truncated at max_elements=30 (6 more node(s) not shown). Pass a larger max_elements, or query/max_depth to reach the rest.",
+  "truncation_reason": "node_budget",
+  "window_bounds": {
+    "height": 102.0,
+    "width": 39.0,
+    "x": 16.0,
+    "y": 697.0
+  },
+  "window_id": 1970,
+  "window_title": "Calculator"
+}

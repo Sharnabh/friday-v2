@@ -1,0 +1,1007 @@
+{
+  "app_name": "Mail",
+  "element_count": 49,
+  "elements": [
+    {
+      "actions": [
+        "AXRaise"
+      ],
+      "depth": 0,
+      "element_index": 0,
+      "element_token": "s00000009:0",
+      "frame": {
+        "h": 1050.0,
+        "w": 834.0,
+        "x": 846.0,
+        "y": 0.0
+      },
+      "label": "FRIDAY smoke test (unsent)",
+      "role": "AXWindow",
+      "subrole": "AXStandardWindow",
+      "title": "FRIDAY smoke test (unsent)"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXConfirm"
+      ],
+      "depth": 1,
+      "element_index": 1,
+      "element_token": "s00000009:1",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 748.5,
+        "x": 892.5,
+        "y": 86.0
+      },
+      "label": "Mail.toField",
+      "parent_index": 0,
+      "role": "AXTextField"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 1,
+      "description": "add contacts",
+      "element_index": 2,
+      "element_token": "s00000009:2",
+      "enabled": true,
+      "frame": {
+        "h": 12.5,
+        "w": 20.0,
+        "x": 1637.0,
+        "y": 88.0
+      },
+      "label": "add contacts",
+      "parent_index": 0,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXConfirm"
+      ],
+      "depth": 1,
+      "element_index": 3,
+      "element_token": "s00000009:3",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 746.5,
+        "x": 894.5,
+        "y": 119.0
+      },
+      "label": "Mail.ccField",
+      "parent_index": 0,
+      "role": "AXTextField"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 1,
+      "description": "add contacts",
+      "element_index": 4,
+      "element_token": "s00000009:4",
+      "enabled": true,
+      "frame": {
+        "h": 12.5,
+        "w": 20.0,
+        "x": 1637.0,
+        "y": 121.0
+      },
+      "label": "add contacts",
+      "parent_index": 0,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXConfirm"
+      ],
+      "depth": 1,
+      "element_index": 5,
+      "element_token": "s00000009:5",
+      "enabled": true,
+      "frame": {
+        "h": 18.0,
+        "w": 732.0,
+        "x": 925.0,
+        "y": 152.0
+      },
+      "label": "FRIDAY smoke test (unsent)",
+      "parent_index": 0,
+      "role": "AXTextField",
+      "value": "FRIDAY smoke test (unsent)"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXScrollToVisible"
+      ],
+      "depth": 1,
+      "element_index": 6,
+      "element_token": "s00000009:6",
+      "enabled": true,
+      "frame": {
+        "h": 838.0,
+        "w": 819.0,
+        "x": 846.0,
+        "y": 212.0
+      },
+      "in_web_content": true,
+      "parent_index": 0,
+      "role": "AXWebArea",
+      "selected": false
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXScrollToVisible"
+      ],
+      "depth": 2,
+      "element_index": 7,
+      "element_token": "s00000009:7",
+      "enabled": true,
+      "frame": {
+        "h": 14.0,
+        "w": 333.0,
+        "x": 870.0,
+        "y": 227.0
+      },
+      "in_web_content": true,
+      "label": "Thursday at 3 p.m. works for me. Could you send the agenda?",
+      "parent_index": 6,
+      "role": "AXStaticText",
+      "selected": false,
+      "value": "Thursday at 3 p.m. works for me. Could you send the agenda?"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXScrollToVisible"
+      ],
+      "depth": 1,
+      "element_index": 8,
+      "element_token": "s00000009:8",
+      "enabled": false,
+      "frame": {
+        "h": 838.0,
+        "w": 15.0,
+        "x": 1665.0,
+        "y": 212.0
+      },
+      "parent_index": 0,
+      "role": "AXScrollBar",
+      "selected": false,
+      "value": "NaN"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXPress"
+      ],
+      "depth": 1,
+      "element_index": 9,
+      "element_token": "s00000009:9",
+      "enabled": true,
+      "frame": {
+        "h": 22.0,
+        "w": 617.0,
+        "x": 908.0,
+        "y": 184.5
+      },
+      "label": "banerjeesharnabh@icloud.com",
+      "parent_index": 0,
+      "role": "AXPopUpButton",
+      "value": "banerjeesharnabh@icloud.com"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "font family",
+      "element_index": 10,
+      "element_token": "s00000009:10",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 93.0,
+        "x": 1044.0,
+        "y": 56.0
+      },
+      "label": "font family",
+      "parent_index": 0,
+      "role": "AXPopUpButton",
+      "value": "Helvetica"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "font size",
+      "element_index": 11,
+      "element_token": "s00000009:11",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 44.0,
+        "x": 1144.0,
+        "y": 56.0
+      },
+      "label": "font size",
+      "parent_index": 0,
+      "role": "AXPopUpButton",
+      "value": "12"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "text colour",
+      "element_index": 12,
+      "element_token": "s00000009:12",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 22.0,
+        "x": 1195.0,
+        "y": 56.0
+      },
+      "label": "text colour",
+      "parent_index": 0,
+      "role": "AXColorWell",
+      "value": "rgb 0 0 0 1"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "element_index": 13,
+      "element_token": "s00000009:13",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 22.0,
+        "x": 1195.0,
+        "y": 56.0
+      },
+      "parent_index": 12,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "text colour",
+      "element_index": 14,
+      "element_token": "s00000009:14",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 22.0,
+        "x": 1222.0,
+        "y": 56.0
+      },
+      "label": "text colour",
+      "parent_index": 0,
+      "role": "AXColorWell",
+      "value": "Clear colour"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "element_index": 15,
+      "element_token": "s00000009:15",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 22.0,
+        "x": 1222.0,
+        "y": 56.0
+      },
+      "parent_index": 14,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "bold",
+      "element_index": 16,
+      "element_token": "s00000009:16",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 20.0,
+        "x": 1251.0,
+        "y": 56.0
+      },
+      "label": "bold",
+      "parent_index": 0,
+      "role": "AXCheckBox",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "italic",
+      "element_index": 17,
+      "element_token": "s00000009:17",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 19.0,
+        "x": 1271.0,
+        "y": 56.0
+      },
+      "label": "italic",
+      "parent_index": 0,
+      "role": "AXCheckBox",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "underline",
+      "element_index": 18,
+      "element_token": "s00000009:18",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 19.0,
+        "x": 1290.0,
+        "y": 56.0
+      },
+      "label": "underline",
+      "parent_index": 0,
+      "role": "AXCheckBox",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "strikethrough",
+      "element_index": 19,
+      "element_token": "s00000009:19",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 19.0,
+        "x": 1309.0,
+        "y": 56.0
+      },
+      "label": "strikethrough",
+      "parent_index": 0,
+      "role": "AXCheckBox",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "align left",
+      "element_index": 20,
+      "element_token": "s00000009:20",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 21.0,
+        "x": 1335.0,
+        "y": 56.0
+      },
+      "label": "align left",
+      "parent_index": 0,
+      "role": "AXRadioButton",
+      "selected": true,
+      "subrole": "AXSegment",
+      "value": "1"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "align centre",
+      "element_index": 21,
+      "element_token": "s00000009:21",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 20.0,
+        "x": 1356.0,
+        "y": 56.0
+      },
+      "label": "align centre",
+      "parent_index": 0,
+      "role": "AXRadioButton",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "align right",
+      "element_index": 22,
+      "element_token": "s00000009:22",
+      "enabled": true,
+      "frame": {
+        "h": 21.0,
+        "w": 20.0,
+        "x": 1376.0,
+        "y": 56.0
+      },
+      "label": "align right",
+      "parent_index": 0,
+      "role": "AXRadioButton",
+      "selected": false,
+      "subrole": "AXSegment",
+      "value": "0"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "list style",
+      "element_index": 23,
+      "element_token": "s00000009:23",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 37.0,
+        "x": 1403.0,
+        "y": 56.0
+      },
+      "label": "list style",
+      "parent_index": 0,
+      "role": "AXMenuButton"
+    },
+    {
+      "actions": [
+        "AXShowMenu",
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "indentation",
+      "element_index": 24,
+      "element_token": "s00000009:24",
+      "enabled": true,
+      "frame": {
+        "h": 20.0,
+        "w": 35.5,
+        "x": 1447.0,
+        "y": 56.0
+      },
+      "label": "indentation",
+      "parent_index": 0,
+      "role": "AXMenuButton"
+    },
+    {
+      "actions": [
+        "AXShowMenu"
+      ],
+      "depth": 1,
+      "element_index": 25,
+      "element_token": "s00000009:25",
+      "frame": {
+        "h": 52.0,
+        "w": 834.0,
+        "x": 846.0,
+        "y": 0.0
+      },
+      "parent_index": 0,
+      "role": "AXToolbar"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 3,
+      "description": "send",
+      "element_index": 26,
+      "element_token": "s00000009:26",
+      "enabled": false,
+      "frame": {
+        "h": 40.0,
+        "w": 52.0,
+        "x": 854.0,
+        "y": 6.0
+      },
+      "label": "send",
+      "parent_index": 25,
+      "role": "AXButton",
+      "subrole": "AXSegment"
+    },
+    {
+      "actions": [
+        "AXPress",
+        "AXShowMenu"
+      ],
+      "depth": 3,
+      "element_index": 27,
+      "element_token": "s00000009:27",
+      "enabled": false,
+      "frame": {
+        "h": 40.0,
+        "w": 31.0,
+        "x": 906.0,
+        "y": 6.0
+      },
+      "label": "sendLater",
+      "parent_index": 25,
+      "role": "AXMenuButton",
+      "subrole": "AXSegment"
+    },
+    {
+      "actions": [
+        "AXPress",
+        "AXShowMenu"
+      ],
+      "depth": 2,
+      "description": "Header Fields",
+      "element_index": 28,
+      "element_token": "s00000009:28",
+      "enabled": true,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 935.0,
+        "y": 0.0
+      },
+      "label": "Header Fields",
+      "parent_index": 25,
+      "role": "AXMenuButton"
+    },
+    {
+      "actions": [
+        "AXPress",
+        "AXShowMenu"
+      ],
+      "depth": 3,
+      "element_index": 29,
+      "element_token": "s00000009:29",
+      "enabled": true,
+      "frame": {
+        "h": 40.0,
+        "w": 57.0,
+        "x": 933.0,
+        "y": 6.0
+      },
+      "parent_index": 28,
+      "role": "AXMenuButton",
+      "subrole": "AXSegment"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "Reply",
+      "element_index": 30,
+      "element_token": "s00000009:30",
+      "enabled": false,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1354.0,
+        "y": 0.0
+      },
+      "label": "Reply",
+      "parent_index": 25,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "Attach",
+      "element_index": 31,
+      "element_token": "s00000009:31",
+      "enabled": true,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1407.0,
+        "y": 0.0
+      },
+      "label": "Attach",
+      "parent_index": 25,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "Include Attachments",
+      "element_index": 32,
+      "element_token": "s00000009:32",
+      "enabled": false,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1460.0,
+        "y": 0.0
+      },
+      "label": "Include Attachments",
+      "parent_index": 25,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "Format",
+      "element_index": 33,
+      "element_token": "s00000009:33",
+      "enabled": true,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1513.0,
+        "y": 0.0
+      },
+      "label": "Format",
+      "parent_index": 25,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 2,
+      "description": "Emoji & Symbols",
+      "element_index": 34,
+      "element_token": "s00000009:34",
+      "enabled": true,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1566.0,
+        "y": 0.0
+      },
+      "label": "Emoji & Symbols",
+      "parent_index": 25,
+      "role": "AXButton"
+    },
+    {
+      "actions": [
+        "AXPress",
+        "AXShowMenu"
+      ],
+      "depth": 2,
+      "description": "Photo Browser",
+      "element_index": 35,
+      "element_token": "s00000009:35",
+      "enabled": true,
+      "frame": {
+        "h": 52.0,
+        "w": 53.0,
+        "x": 1619.0,
+        "y": 0.0
+      },
+      "label": "Photo Browser",
+      "parent_index": 25,
+      "role": "AXMenuButton"
+    },
+    {
+      "actions": [
+        "AXPress",
+        "AXShowMenu"
+      ],
+      "depth": 3,
+      "element_index": 36,
+      "element_token": "s00000009:36",
+      "enabled": true,
+      "frame": {
+        "h": 40.0,
+        "w": 57.0,
+        "x": 1617.0,
+        "y": 6.0
+      },
+      "parent_index": 35,
+      "role": "AXMenuButton",
+      "subrole": "AXSegment"
+    },
+    {
+      "actions": [
+        "AXCancel"
+      ],
+      "depth": 0,
+      "element_index": 37,
+      "element_token": "s00000009:37",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 1680.0,
+        "x": 0.0,
+        "y": 0.0
+      },
+      "label": "_NS:1833",
+      "role": "AXMenuBar",
+      "selected": false
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 38,
+      "element_token": "s00000009:38",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 34.0,
+        "x": 10.0,
+        "y": 0.0
+      },
+      "label": "Apple",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Apple"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 39,
+      "element_token": "s00000009:39",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 47.0,
+        "x": 44.0,
+        "y": 0.0
+      },
+      "label": "Mail",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Mail"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 40,
+      "element_token": "s00000009:40",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 42.0,
+        "x": 91.0,
+        "y": 0.0
+      },
+      "label": "File",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "File"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 41,
+      "element_token": "s00000009:41",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 44.0,
+        "x": 133.0,
+        "y": 0.0
+      },
+      "label": "Edit",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Edit"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 42,
+      "element_token": "s00000009:42",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 50.0,
+        "x": 177.0,
+        "y": 0.0
+      },
+      "label": "View",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "View"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 43,
+      "element_token": "s00000009:43",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 67.0,
+        "x": 227.0,
+        "y": 0.0
+      },
+      "label": "Mailbox",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Mailbox"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 44,
+      "element_token": "s00000009:44",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 75.0,
+        "x": 294.0,
+        "y": 0.0
+      },
+      "label": "Message",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Message"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 45,
+      "element_token": "s00000009:45",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 63.0,
+        "x": 369.0,
+        "y": 0.0
+      },
+      "label": "Format",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Format"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 46,
+      "element_token": "s00000009:46",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 69.0,
+        "x": 432.0,
+        "y": 0.0
+      },
+      "label": "Window",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Window"
+    },
+    {
+      "actions": [
+        "AXCancel",
+        "AXPress",
+        "AXPick"
+      ],
+      "depth": 1,
+      "element_index": 47,
+      "element_token": "s00000009:47",
+      "enabled": true,
+      "frame": {
+        "h": 24.0,
+        "w": 48.0,
+        "x": 501.0,
+        "y": 0.0
+      },
+      "label": "Help",
+      "parent_index": 37,
+      "role": "AXMenuBarItem",
+      "selected": false,
+      "title": "Help"
+    },
+    {
+      "actions": [
+        "AXPress"
+      ],
+      "depth": 1,
+      "description": "Send",
+      "element_index": 48,
+      "element_token": "s00000009:48",
+      "enabled": false,
+      "frame": {
+        "h": 32.0,
+        "w": 74.0,
+        "x": 79.0,
+        "y": -1.0
+      },
+      "label": "Send",
+      "role": "AXButton"
+    }
+  ],
+  "elements_complete": false,
+  "pid": 21531,
+  "returned_element_count": 49,
+  "snapshot_id": "s00000009",
+  "timeout_ms": 1000,
+  "total_element_count": 49,
+  "tree_format": "elements",
+  "truncated": false,
+  "window_id": 2168,
+  "window_title": "FRIDAY smoke test (unsent)"
+}

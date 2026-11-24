@@ -1,0 +1,27 @@
+{
+  "app_name": "TextEdit",
+  "capture_id": "capture_7165ee0d27664844bc0f6bf5231108a3_0000000000000001",
+  "element_count": 17,
+  "elements_complete": false,
+  "pid": 18599,
+  "returned_element_count": 17,
+  "screenshot_frame_valid": true,
+  "screenshot_height": 866,
+  "screenshot_mime_type": "image/png",
+  "screenshot_scale": 2.0,
+  "screenshot_width": 1322,
+  "snapshot_id": "s00000002",
+  "timeout_ms": 1000,
+  "total_element_count": 17,
+  "tree_format": "markdown",
+  "tree_markdown": "- [0] AXWindow \"FRIDAY-screen-test.txt\" [id=_NS:34 actions=[raise]]\n  - [1] AXTextArea = \"FRIDAY visual test\nVerification code: BLUE ORBIT 47\" [id=First Text View]\n  - [2] AXButton [actions=[press]]\n  - [3] AXButton [help=\"this button also has an action to zoom the window\" actions=[press,zoomwindow]]\n  - [4] AXButton [actions=[press]]\n  - [5] AXMenuButton (document actions) [enabled=false actions=[press]]\n  - AXImage \"FRIDAY-screen-test.txt\"\n- [6] AXMenuBar [id=_NS:813 actions=[cancel]] (menus collapsed: run an item with invoke_menu path, or pass query to search menu items)\n  - [7] AXMenuBarItem \"Apple\" [actions=[cancel,press,pick]]\n  - [8] AXMenuBarItem \"TextEdit\" [id=_NS:818 actions=[cancel,press,pick]]\n  - [9] AXMenuBarItem \"File\" [id=_NS:840 actions=[cancel,press,pick]]\n  - [10] AXMenuBarItem \"Edit\" [id=_NS:866 actions=[cancel,press,pick]]\n  - [11] AXMenuBarItem \"Format\" [id=_NS:925 actions=[cancel,press,pick]]\n  - [12] AXMenuBarItem \"View\" [id=_NS:966 actions=[cancel,press,pick]]\n  - [13] AXMenuBarItem \"Window\" [id=_NS:976 actions=[cancel,press,pick]]\n  - [14] AXMenuBarItem \"Help\" [id=_NS:986 actions=[cancel,press,pick]]\n  - [15] AXPopUpButton (emoji & symbols) [help=\"Tap to choose special characters and emojis\" actions=[press]]\n  - [16] AXDisclosureTriangle \"Candidate Bar\" [actions=[press]]\n",
+  "truncated": false,
+  "window_bounds": {
+    "height": 433.0,
+    "width": 661.0,
+    "x": 177.0,
+    "y": 73.0
+  },
+  "window_id": 2006,
+  "window_title": "FRIDAY-screen-test.txt"
+}

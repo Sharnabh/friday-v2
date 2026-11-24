@@ -1,0 +1,16 @@
+{
+  "app_name": "TextEdit",
+  "element_count": 17,
+  "elements_complete": false,
+  "on_current_space": false,
+  "pid": 18599,
+  "returned_element_count": 17,
+  "snapshot_id": "s00000006",
+  "timeout_ms": 1000,
+  "total_element_count": 17,
+  "tree_format": "markdown",
+  "tree_markdown": "- [0] AXMenuBar [id=_NS:813 actions=[cancel]] (menus collapsed: run an item with invoke_menu path, or pass query to search menu items)\n  - [1] AXMenuBarItem \"Apple\" [actions=[cancel,press,pick]]\n  - [2] AXMenuBarItem \"TextEdit\" [id=_NS:818 actions=[cancel,press,pick]]\n  - [3] AXMenuBarItem \"File\" [id=_NS:840 actions=[cancel,press,pick]]\n  - [4] AXMenuBarItem \"Edit\" [id=_NS:866 actions=[cancel,press,pick]]\n  - [5] AXMenuBarItem \"Format\" [id=_NS:925 actions=[cancel,press,pick]]\n  - [6] AXMenuBarItem \"View\" [id=_NS:966 actions=[cancel,press,pick]]\n  - [7] AXMenuBarItem \"Window\" [id=_NS:976 actions=[cancel,press,pick]]\n  - [8] AXMenuBarItem \"Help\" [id=_NS:986 actions=[cancel,press,pick]]\n  - [9] AXPopUpButton (emoji & symbols) [help=\"Tap to choose special characters and emojis\" actions=[press]]\n  - [10] AXDisclosureTriangle \"Candidate Bar\" [actions=[press]]\n- [11] AXWindow \"FRIDAY-screen-test.txt\" [id=_NS:34 actions=[raise]]\n  - [12] AXTextArea = \"FRIDAY INPUT VERIFIEDFRIDAY visual test\nVerification code: BLUE ORBIT 47\" [id=First Text View]\n  - [13] AXButton [actions=[press]]\n  - [14] AXButton [help=\"this button also has an action to zoom the window\" actions=[press,zoomwindow]]\n  - [15] AXButton [actions=[press]]\n  - [16] AXMenuButton \"Edited\" (document actions) [actions=[press]]\n  - AXImage \"FRIDAY-screen-test.txt\"\n  - AXStaticText = \"—\"\n",
+  "truncated": false,
+  "window_id": 2006,
+  "window_title": "FRIDAY-screen-test.txt"
+}

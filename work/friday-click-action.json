@@ -1,0 +1,18 @@
+{
+  "delivery": {
+    "mode": "foreground"
+  },
+  "effect": "unverifiable",
+  "hint": "The click was sent but nothing confirmed it. Read what changed before clicking again; a repeat can toggle or double-fire.",
+  "next_call": {
+    "arguments": {
+      "pid": 18599,
+      "session": "friday-click-proof",
+      "since": "latest",
+      "window_id": 2006
+    },
+    "tool": "get_window_state"
+  },
+  "route": "global_input",
+  "summary": "Sent, effect not verified: Posted click at screen-point (891,260) for pid 18599 (foreground: exact window activated, hardware pointer moved to the target, HID event tap; not driver-verified — confirm via screenshot)."
+}

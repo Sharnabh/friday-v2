@@ -1,0 +1,13 @@
+{
+  "code": "window_id_not_found",
+  "hint": "No window matches that target now. List the app's windows and use a current window_id; launch or restore the app if it has none.",
+  "next_call": {
+    "arguments": {
+      "pid": 19132
+    },
+    "tool": "list_windows"
+  },
+  "pid": 19132,
+  "suggestion": "call list_windows for current window_ids; the window may have closed",
+  "window_id": 2091
+}

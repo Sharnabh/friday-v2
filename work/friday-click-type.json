@@ -1,0 +1,15 @@
+{
+  "delivery": {
+    "delivered_count": 15,
+    "mode": "foreground"
+  },
+  "effect": "confirmed",
+  "evidence": [
+    {
+      "kind": "value_readback"
+    }
+  ],
+  "hint": "Send known next actions in one run_steps call with observe:{} (no separate read): it runs them in order, stops at the first failure and returns what changed. Ready: run_steps({pid:18599,window_id:2006,steps:[{click:{role,name}},{type_text:{text}}],observe:{}})",
+  "route": "global_input",
+  "summary": "✅ Inserted 15 char(s) via foreground keystrokes (0ms delay)."
+}

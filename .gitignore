@@ -1,0 +1,32 @@
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Build outputs, compiled test binaries, and temporary caches
+*.app/
+*.o
+*.dSYM
+*.ipa
+outputs/*.app
+
+# Mach-O test binaries in work/
+work/Friday-*
+work/test-*
+work/friday-select-test-speaker
+
+# Large local models and audio dumps
+work/friday-models/
+work/friday-whisper-src/
+*.wav
+*.aiff
+*.mp3
+*.png
+*.jpg
+*.log
+*.lock
+
+# Temporary/scratch build artifacts
+/Users/user/Library/
