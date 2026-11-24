@@ -5,12 +5,14 @@ struct ContentView: View {
     @EnvironmentObject var state: AppState
     @State private var selectedTab: Int = 0
     @State private var showCreateBot = false
+    @State private var showCreateGroup = false
     @State private var newBotName = ""
     @State private var newBotInstructions = ""
+    @State private var newGroupName = ""
+    @State private var selectedGroupMembers = Set<String>()
 
     var body: some View {
         NavigationSplitView {
-            // Sidebar: Bots, Groups & Tools
             List(selection: $state.activeBotId) {
                 Section("Assistant") {
                     NavigationLink(value: "") {
@@ -54,13 +56,20 @@ struct ContentView: View {
             .listStyle(.sidebar)
             .navigationTitle("FRIDAY")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         showCreateBot = true
                     } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: "person.badge.plus")
                     }
-                    .help("Create New Bot")
+                    .help("Create Custom Bot")
+
+                    Button {
+                        showCreateGroup = true
+                    } label: {
+                        Image(systemName: "person.3.fill")
+                    }
+                    .help("Create Group Chat")
                 }
             }
         } detail: {
@@ -102,6 +111,47 @@ struct ContentView: View {
             .padding()
             .frame(width: 420)
         }
+        .sheet(isPresented: $showCreateGroup) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Create Multi-Bot Group")
+                    .font(.headline)
+                TextField("Group Name", text: $newGroupName)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Select participating bots:")
+                    .font(.subheadline)
+                List {
+                    ForEach([""] + state.bots.map { $0.id }, id: \.self) { botId in
+                        let name = state.bots.first(where: { $0.id == botId })?.name ?? "FRIDAY"
+                        Toggle(name, isOn: Binding(
+                            get: { selectedGroupMembers.contains(botId) },
+                            set: { on in
+                                if on { selectedGroupMembers.insert(botId) }
+                                else { selectedGroupMembers.remove(botId) }
+                            }
+                        ))
+                    }
+                }
+                .frame(height: 140)
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showCreateGroup = false }
+                    Button("Create Group") {
+                        if !newGroupName.isEmpty && selectedGroupMembers.count >= 2 {
+                            state.createGroup(name: newGroupName, memberIds: Array(selectedGroupMembers))
+                            newGroupName = ""
+                            selectedGroupMembers.removeAll()
+                            showCreateGroup = false
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newGroupName.isEmpty || selectedGroupMembers.count < 2)
+                }
+            }
+            .padding()
+            .frame(width: 420)
+        }
     }
 }
 
@@ -110,14 +160,35 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Configuration bar (Model / Provider)
+            // Configuration bar (Model / Provider / Mic / Wake)
             HStack(spacing: 12) {
                 TextField("Provider (e.g. anthropic, gemini)", text: $state.provider)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 200)
+                    .frame(maxWidth: 180)
                 TextField("Model override", text: $state.model)
                     .textFieldStyle(.roundedBorder)
-                Spacer()
+                    .frame(maxWidth: 160)
+
+                if !state.availableMics.isEmpty {
+                    Picker("Mic", selection: $state.selectedMic) {
+                        ForEach(state.availableMics, id: \.self) { mic in
+                            Text(mic).tag(mic)
+                        }
+                    }
+                    .frame(maxWidth: 150)
+                }
+
+                Toggle("Hey Friday", isOn: $state.isWakeEnabled)
+                    .toggleStyle(.switch)
+
+                Button {
+                    state.toggleVoiceRecording()
+                } label: {
+                    Image(systemName: state.isVoiceActive ? "mic.fill" : "mic.slash")
+                        .foregroundColor(state.isVoiceActive ? .red : .secondary)
+                }
+                .help(state.isVoiceActive ? "Stop Voice Recording" : "Record Voice")
+
                 Button {
                     AssistantService.shared.stopSpeaking()
                 } label: {
@@ -127,6 +198,13 @@ struct ChatView: View {
             }
             .padding(.horizontal)
             .padding(.top, 8)
+
+            if state.audioLevel > 0.05 {
+                ProgressView(value: state.audioLevel)
+                    .progressViewStyle(.linear)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+            }
 
             Divider().padding(.vertical, 8)
 

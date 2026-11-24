@@ -8,6 +8,13 @@ public final class AppState: ObservableObject {
     @Published public var isBusy: Bool = false
     @Published public var currentTranscript: [String] = []
     
+    // Voice & Wake Word
+    @Published public var isVoiceActive: Bool = false
+    @Published public var isWakeEnabled: Bool = false
+    @Published public var audioLevel: Double = 0.0
+    @Published public var availableMics: [String] = []
+    @Published public var selectedMic: String = ""
+
     // Bots and Groups
     @Published public var activeBotId: String = ""
     @Published public var bots: [BotProfile] = []
@@ -25,6 +32,7 @@ public final class AppState: ObservableObject {
     public var activityService: ActivityService
 
     private let defaults = UserDefaults.standard
+    private var reminderTimer: Timer?
 
     public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -44,15 +52,76 @@ public final class AppState: ObservableObject {
         loadBotsAndGroups()
         loadTranscripts()
         loadReminders()
+        setupVoicePipeline()
+        startReminderPoller()
     }
 
     public var activeBotScope: String {
         activeBotId.isEmpty ? "" : "bot." + activeBotId + "."
     }
 
+    public var isGroupSelected: Bool {
+        activeBotId == "group" || groups.contains(where: { $0.id == activeBotId })
+    }
+
     public var memoryScope: String {
-        let isGroup = activeBotId == "group" || groups.contains(where: { $0.id == activeBotId })
-        return (isGroup ? "group:" : "private:") + activeBotId
+        (isGroupSelected ? "group:" : "private:") + activeBotId
+    }
+
+    public var groupMembers: [String] {
+        if let g = groups.first(where: { $0.id == activeBotId }) {
+            return g.members
+        }
+        return [""] + bots.map { $0.id }
+    }
+
+    private func setupVoicePipeline() {
+        let voice = VoiceService.shared
+        self.availableMics = voice.listMicrophones()
+        self.selectedMic = defaults.string(forKey: "fridayMic") ?? availableMics.first ?? ""
+
+        voice.onLevelUpdate = { [weak self] level in
+            Task { @MainActor in self?.audioLevel = level }
+        }
+        voice.onStateUpdate = { [weak self] state in
+            Task { @MainActor in self?.statusMessage = state }
+        }
+        voice.onTranscriptionComplete = { [weak self] text in
+            Task { @MainActor in
+                self?.inputMessage = text
+                self?.statusMessage = "Review transcription, then Send"
+                if self?.isWakeEnabled == true {
+                    self?.sendMessage()
+                }
+            }
+        }
+        voice.onError = { [weak self] error in
+            Task { @MainActor in self?.statusMessage = error }
+        }
+    }
+
+    public func toggleVoiceRecording() {
+        if isVoiceActive {
+            VoiceService.shared.stopCapture()
+            isVoiceActive = false
+        } else {
+            VoiceService.shared.startCapture(handsFree: isWakeEnabled, micDeviceName: selectedMic)
+            isVoiceActive = true
+        }
+    }
+
+    private func startReminderPoller() {
+        reminderTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkDueReminders() }
+        }
+    }
+
+    private func checkDueReminders() {
+        guard !isBusy, let rem = try? reminderService.takeDue(at: Date()) else { return }
+        statusMessage = "Reminder: " + rem.text
+        try? activityService.append(ActivityEntry(date: Date(), scheduled: rem.due, action: "Reminder Fired", subject: rem.text))
+        loadReminders()
+        AssistantService.shared.speak("Reminder: " + rem.text)
     }
 
     public func loadBotsAndGroups() {
@@ -88,6 +157,19 @@ public final class AppState: ObservableObject {
         selectBot(id)
     }
 
+    public func createGroup(name: String, memberIds: [String]) {
+        let id = "group-" + UUID().uuidString
+        var updated = groups
+        updated.append(BotGroup(id: id, name: name, members: memberIds))
+        var groupMap = [String: BotGroup]()
+        for g in updated { groupMap[g.id] = g }
+        if let data = try? JSONEncoder().encode(groupMap) {
+            defaults.set(data, forKey: "namedGroups")
+            loadBotsAndGroups()
+            selectBot(id)
+        }
+    }
+
     public var sessionID: String {
         if let id = defaults.string(forKey: activeBotScope + "fridaySession") { return id }
         let id = UUID().uuidString
@@ -113,7 +195,7 @@ public final class AppState: ObservableObject {
         guard let store = memoryStore else { return }
         let scope = isShared ? "shared" : memoryScope
         do {
-            try store.save(body, scope: scope, source: "Entered via SwiftUI", original: nil)
+            try store.save(body, scope: scope, source: "User added", original: nil)
             loadMemories()
             self.statusMessage = "Memory saved to \(scope)."
         } catch {
@@ -148,7 +230,7 @@ public final class AppState: ObservableObject {
 
         inputMessage = ""
         isBusy = true
-        statusMessage = "Streaming response…"
+        statusMessage = "Understanding request…"
 
         let key = activeBotScope + "transcript." + sessionID
         var turns = defaults.stringArray(forKey: key) ?? []
@@ -156,40 +238,138 @@ public final class AppState: ObservableObject {
         defaults.set(turns, forKey: key)
         self.currentTranscript = turns
 
-        // Retrieve Hybrid context memories
-        var context = ""
-        if let store = memoryStore {
-            if let results = try? store.search(text, scope: memoryScope, limit: 3) {
-                context = results.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
-            }
-        }
-
-        let botName = bots.first(where: { $0.id == activeBotId })?.name ?? "FRIDAY"
-        let botInstr = bots.first(where: { $0.id == activeBotId })?.instructions ?? ""
-
         Task {
             do {
-                let result = try await AssistantService.shared.streamChat(
-                    prompt: text,
+                let cacheKey = activeBotScope + "screen." + sessionID
+                let history = turns.suffix(3).map { String($0.prefix(2000)) }
+                let previous = defaults.string(forKey: cacheKey)
+
+                // 1. Intelligent Route Decision
+                let decision = try ScreenInferenceRouter.routeQuestion(
+                    text,
+                    history: history,
+                    hasPreviousCapture: previous != nil,
                     provider: provider,
-                    model: model,
-                    sessionID: sessionID,
-                    contextMemory: context,
-                    botName: botName,
-                    botInstructions: botInstr
-                ) { _ in
-                    Task { @MainActor in
-                        self.statusMessage = "Receiving stream…"
+                    model: model
+                )
+
+                let botName = bots.first(where: { $0.id == activeBotId })?.name ?? "FRIDAY"
+                let botInstr = bots.first(where: { $0.id == activeBotId })?.instructions ?? ""
+
+                // 2. Action or Chat Dispatch
+                var reply = ""
+                switch decision.source {
+                case .remember:
+                    let proposalReq: [String: Any] = [
+                        "operation": "memoryProposal",
+                        "question": text,
+                        "history": history
+                    ]
+                    let proposal = try ScreenInferenceRouter.infer(proposalReq, provider: provider, model: model)
+                    saveMemory(body: proposal, isShared: true)
+                    reply = "I've remembered that for you: “\(proposal)”"
+
+                case .control:
+                    statusMessage = "Operating Mac app…"
+                    let planReq: [String: Any] = ["operation": "control", "question": text]
+                    let planJson = try ScreenInferenceRouter.infer(planReq, provider: provider, model: model)
+                    let activeProvider = provider
+                    let activeModel = model
+                    reply = try MacAutomationDriver.performMacPlan(planJson) { visible in
+                        var rev = planReq
+                        rev["visibleControls"] = visible
+                        rev["initialPlan"] = planJson
+                        let revPlan = try ScreenInferenceRouter.infer(rev, provider: activeProvider, model: activeModel)
+                        return try JSONDecoder().decode(MacPlan.self, from: Data(revPlan.utf8))
+                    }
+
+                case .active:
+                    statusMessage = "Reading active window…"
+                    let capture = try MacAutomationDriver.readActiveWindow()
+                    defaults.set(String(capture.prefix(12000)), forKey: cacheKey)
+                    let answerReq: [String: Any] = ["operation": "answer", "capture": String(capture.prefix(12000)), "question": text]
+                    reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+
+                case .editor:
+                    statusMessage = "Reading TextEdit document…"
+                    let capture = try MacAutomationDriver.readEditor(text)
+                    reply = "TextEdit contents:\n" + capture
+
+                case .mailReply, .calendarReply:
+                    statusMessage = "Drafting Apple Mail reply…"
+                    let helper = Bundle.main.path(forResource: "mail_reply", ofType: "js")
+                        ?? "/Users/user/Documents/Codex/2026-11-23/i-w/outputs/Friday.app/Contents/Resources/mail_reply.js"
+                    let msg = try MailCalendarService.mailOperation(["read"], helperScriptPath: helper)
+                    guard let ident = msg["identity"], let body = msg["body"], let subj = msg["subject"] else {
+                        throw FridayError.message("Could not read selected email.")
+                    }
+                    var draftReq: [String: Any] = ["operation": "mailBody", "question": text, "subject": subj, "body": body]
+                    if decision.source == .calendarReply {
+                        draftReq["calendar"] = try MailCalendarService.upcomingCalendarConflicts()
+                    }
+                    let draft = try ScreenInferenceRouter.infer(draftReq, provider: provider, model: model)
+                    _ = try MailCalendarService.mailOperation(["draft", ident, draft], helperScriptPath: helper)
+                    reply = "Reply draft opened in Apple Mail for review."
+
+                case .previous:
+                    if let prev = previous {
+                        let answerReq: [String: Any] = ["operation": "answer", "capture": prev, "question": text]
+                        reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+                    } else {
+                        reply = "No previous screen capture available for follow-up."
+                    }
+
+                case .chat:
+                    if isGroupSelected {
+                        // Multi-Bot Group Conversation
+                        for memberId in groupMembers {
+                            let memberName = bots.first(where: { $0.id == memberId })?.name ?? "FRIDAY"
+                            let memberInstr = bots.first(where: { $0.id == memberId })?.instructions ?? ""
+                            statusMessage = "\(memberName) is replying…"
+                            let memberReply = try await AssistantService.shared.streamChat(
+                                prompt: text,
+                                provider: provider,
+                                model: model,
+                                sessionID: sessionID,
+                                contextMemory: "",
+                                botName: memberName,
+                                botInstructions: memberInstr,
+                                onChunk: { _ in }
+                            )
+                            turns.append(memberName + "\n" + memberReply)
+                            defaults.set(turns, forKey: key)
+                            self.currentTranscript = turns
+                        }
+                        statusMessage = "Ready"
+                        isBusy = false
+                        return
+                    } else {
+                        // Hybrid Memory Context Injection
+                        var context = ""
+                        if let store = memoryStore, let results = try? store.search(text, scope: memoryScope, limit: 3) {
+                            context = results.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
+                        }
+                        statusMessage = "Streaming response…"
+                        reply = try await AssistantService.shared.streamChat(
+                            prompt: text,
+                            provider: provider,
+                            model: model,
+                            sessionID: sessionID,
+                            contextMemory: context,
+                            botName: botName,
+                            botInstructions: botInstr,
+                            onChunk: { _ in }
+                        )
                     }
                 }
 
-                turns.append(botName + "\n" + result)
+                turns.append(botName + "\n" + reply)
                 defaults.set(turns, forKey: key)
                 self.currentTranscript = turns
                 self.statusMessage = "Ready"
                 self.isBusy = false
+                AssistantService.shared.speak(reply)
 
-                AssistantService.shared.speak(result)
             } catch {
                 self.statusMessage = "Error: \(error.localizedDescription)"
                 self.isBusy = false
