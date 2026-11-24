@@ -144,6 +144,38 @@ struct TestRunner {
             assert(clearedTriples.isEmpty, "Triples should be empty after clearAll")
             print("   Successfully cleared all memories and triples")
 
+            // 8. Test Industry-Standard Entity Resolution & Superseding (ChatGPT/Gemini Style)
+            print("\n[Step 8] Testing Entity Resolution & Attribute Superseding...")
+            try store.saveTriple(GraphTriple(scope: "shared", subject: "User", predicate: "has_name", object: "Sharnabh"))
+            var nameTriples = try store.listTriples(scope: "all")
+            assert(nameTriples.count == 1 && nameTriples[0].object == "Sharnabh", "Initial name triple must exist")
+
+            // User updates their name -> must supersede rather than duplicate
+            try store.saveTriple(GraphTriple(scope: "shared", subject: "User", predicate: "has_name", object: "Alexander"))
+            nameTriples = try store.listTriples(scope: "all")
+            assert(nameTriples.count == 1, "Attribute superseding must maintain exactly 1 name triple")
+            assert(nameTriples[0].object == "Alexander", "Old name must be superseded with Alexander")
+            print("   Successfully superseded triple attribute: (User) —[has_name]→ (Alexander)")
+
+            // Test Memory FTS5 prefix superseding
+            try store.save("User's name is Sharnabh", scope: "shared", source: "User", importance: 10, original: nil)
+            var prefixMemories = try store.search("name", scope: "shared", limit: 10)
+            assert(prefixMemories.count == 1 && prefixMemories[0].body == "User's name is Sharnabh", "Initial memory must exist")
+
+            try store.save("User's name is Alexander", scope: "shared", source: "User", importance: 10, original: nil)
+            prefixMemories = try store.search("Alexander", scope: "shared", limit: 10)
+            assert(prefixMemories.count == 1, "Memory superseding must maintain 1 updated row")
+            assert(prefixMemories[0].body == "User's name is Alexander", "Old memory must be updated in-place")
+            print("   Successfully superseded memory in-place: 'User's name is Alexander'")
+
+            // Test Natural Language deleteMatching
+            let deleted = try store.deleteMatching(topic: "Alexander", scope: "all")
+            assert(!deleted.isEmpty, "deleteMatching must find and remove matching entries")
+            let postDelete = try store.search("Alexander", scope: "all", limit: 10)
+            let postTriples = try store.listTriples(scope: "all")
+            assert(postDelete.isEmpty && postTriples.isEmpty, "All Alexander records must be deleted")
+            print("   Successfully executed deleteMatching ('Alexander') and verified clean state")
+
             print("\n==================================================")
             print("  ALL MEMORY UPGRADES VERIFIED AND PASSED (100%)  ")
             print("==================================================")

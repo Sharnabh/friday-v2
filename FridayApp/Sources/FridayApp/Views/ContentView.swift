@@ -89,7 +89,6 @@ func avatarColor(for name: String) -> Color {
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.colorScheme) var colorScheme
-    @State private var selectedTab: Int = 0
     @State private var showCreateBot = false
     @State private var showCreateGroup = false
     @State private var newBotName = ""
@@ -240,17 +239,17 @@ struct ContentView: View {
 
                     Section("Workspaces") {
                         Button {
-                            selectedTab = 0
+                            state.selectedTab = 0
                         } label: {
                             Label("Messages", systemImage: "bubble.left.and.bubble.right")
                         }
                         Button {
-                            selectedTab = 1
+                            state.selectedTab = 1
                         } label: {
                             Label("Memory Vault", systemImage: "brain.head.profile")
                         }
                         Button {
-                            selectedTab = 2
+                            state.selectedTab = 2
                         } label: {
                             Label("Reminders & Tasks", systemImage: "clock.badge.checkmark")
                         }
@@ -261,7 +260,7 @@ struct ContentView: View {
             .navigationTitle("")
         } detail: {
             Group {
-                switch selectedTab {
+                switch state.selectedTab {
                 case 1:
                     MemoryView()
                 case 2:
@@ -625,7 +624,7 @@ struct ChatView: View {
             }
 
             // WhatsApp Message Canvas with Signature Wallpaper
-            ZStack {
+            ZStack(alignment: .top) {
                 WhatsAppTheme.wallpaper(for: colorScheme)
                     .ignoresSafeArea()
 
@@ -645,6 +644,57 @@ struct ChatView: View {
                             withAnimation { proxy.scrollTo(last, anchor: .bottom) }
                         }
                     }
+                }
+
+                // ChatGPT/Gemini-Style Floating Memory Notification Pill
+                if state.showMemoryToast, let notice = state.lastMemoryUpdateNotice {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(WhatsAppTheme.emerald)
+                            .font(.system(size: 13, weight: .semibold))
+
+                        Text("Memory updated:")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.primary)
+
+                        Text(notice)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Button {
+                            state.selectedTab = 1
+                            state.showMemoryToast = false
+                        } label: {
+                            Text("Manage")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(WhatsAppTheme.emerald)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                state.showMemoryToast = false
+                            }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 3)
+                    .overlay(Capsule().stroke(WhatsAppTheme.emerald.opacity(0.4), lineWidth: 1))
+                    .padding(.horizontal, 24)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(100)
                 }
             }
 

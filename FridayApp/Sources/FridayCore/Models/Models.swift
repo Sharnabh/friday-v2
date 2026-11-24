@@ -128,11 +128,39 @@ public struct ExtractedFactPayload: Codable, Sendable {
     public let facts: [FactItem]
     public let triples: [TriplePayload]
     public let importance: Int?
+    public let isDurableUserFact: Bool?
 
-    public init(facts: [FactItem] = [], triples: [TriplePayload] = [], importance: Int? = 5) {
+    public init(facts: [FactItem] = [], triples: [TriplePayload] = [], importance: Int? = 5, isDurableUserFact: Bool? = true) {
         self.facts = facts
         self.triples = triples
         self.importance = importance
+        self.isDurableUserFact = isDurableUserFact
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case facts, triples, importance
+        case isDurableUserFact = "is_durable_user_fact"
+        case isDurableUserFactAlt = "isDurableUserFact"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.facts = (try? container.decodeIfPresent([FactItem].self, forKey: .facts)) ?? []
+        self.triples = (try? container.decodeIfPresent([TriplePayload].self, forKey: .triples)) ?? []
+        self.importance = try? container.decodeIfPresent(Int.self, forKey: .importance)
+        if let durable = try? container.decodeIfPresent(Bool.self, forKey: .isDurableUserFact) {
+            self.isDurableUserFact = durable
+        } else {
+            self.isDurableUserFact = try? container.decodeIfPresent(Bool.self, forKey: .isDurableUserFactAlt)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(facts, forKey: .facts)
+        try container.encode(triples, forKey: .triples)
+        try container.encodeIfPresent(importance, forKey: .importance)
+        try container.encodeIfPresent(isDurableUserFact, forKey: .isDurableUserFact)
     }
 }
 

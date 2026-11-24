@@ -38,6 +38,7 @@ public final class AppState: ObservableObject {
     @Published public var graphTriples: [GraphTriple] = []
     @Published public var reminders: [Reminder] = []
     @Published public var activities: [ActivityEntry] = []
+    @Published public var selectedTab: Int = 0 // 0: Messages, 1: Memory Vault, 2: Reminders
 
     // Persona & Instructions Editing
     @Published public var showEditPersonaModal: Bool = false
@@ -50,6 +51,11 @@ public final class AppState: ObservableObject {
     @Published public var editingGroupId: String = ""
     @Published public var editingGroupName: String = ""
     @Published public var editingGroupMembers: Set<String> = []
+
+    // ChatGPT/Gemini-Style In-Chat Memory Notification Pill
+    @Published public var lastMemoryUpdateNotice: String? = nil
+    @Published public var showMemoryToast: Bool = false
+    private var toastTimer: Timer?
 
     public var memoryStore: HybridMemoryStore?
     public var reminderService: ReminderService
@@ -71,6 +77,14 @@ public final class AppState: ObservableObject {
             self.memoryStore = try HybridMemoryStore(url: dbUrl)
         } catch {
             self.statusMessage = "Memory store init error: \(error.localizedDescription)"
+        }
+
+        // Real-time memory notification hook from autonomous extractor
+        BackgroundFactExtractor.shared.onFactSaved = { [weak self] fact in
+            Task { @MainActor in
+                self?.notifyMemoryUpdated(text: fact)
+                self?.loadMemories()
+            }
         }
 
         loadBotsAndGroups()
@@ -532,12 +546,28 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func notifyMemoryUpdated(text: String) {
+        lastMemoryUpdateNotice = text
+        withAnimation(.easeInOut(duration: 0.3)) {
+            showMemoryToast = true
+        }
+        toastTimer?.invalidate()
+        toastTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    self?.showMemoryToast = false
+                }
+            }
+        }
+    }
+
     public func saveMemory(body: String, isShared: Bool) {
         guard let store = memoryStore else { return }
         let scope = isShared ? "shared" : memoryScope
         do {
             try store.save(body, scope: scope, source: "User added", original: nil)
             loadMemories()
+            notifyMemoryUpdated(text: body)
             self.statusMessage = "Memory saved to \(scope)."
         } catch {
             self.statusMessage = error.localizedDescription
@@ -596,6 +626,48 @@ public final class AppState: ObservableObject {
 
                 let botName = currentBotName
                 let botInstr = currentBotInstructions
+
+                // Natural Language Memory Forget Handler (ChatGPT / Gemini style)
+                let lowerText = text.lowercased()
+                let isForgetRequest = lowerText.hasPrefix("forget ") || lowerText.contains("forget that i ") ||
+                                      lowerText.contains("forget that my ") || lowerText.contains("forget my ") ||
+                                      lowerText.contains("forget about ") || lowerText.contains("delete memory about ") ||
+                                      lowerText.contains("remove from memory ")
+
+                if isForgetRequest, let store = self.memoryStore {
+                    var targetTopic = text
+                    let stripPrefixes = ["forget that i am a ", "forget that i am ", "forget that i ", "forget that my ",
+                                         "forget my ", "forget about ", "forget ", "delete memory about ", "remove from memory "]
+                    for p in stripPrefixes {
+                        if lowerText.contains(p) {
+                            if let r = lowerText.range(of: p) {
+                                targetTopic = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                                break
+                            }
+                        }
+                    }
+                    if targetTopic.isEmpty { targetTopic = text }
+
+                    let deleted = (try? store.deleteMatching(topic: targetTopic, scope: "all")) ?? []
+                    WorkingMemoryCache.shared.clear()
+                    loadMemories()
+
+                    let replyText: String
+                    if !deleted.isEmpty {
+                        replyText = "I've updated my memory and forgotten that for you: “\(deleted.first ?? targetTopic)”"
+                        notifyMemoryUpdated(text: "Forgotten: \(targetTopic)")
+                    } else {
+                        replyText = "I checked my memory and couldn't find any stored facts matching “\(targetTopic)”."
+                    }
+
+                    turns.append(botName + "\n" + replyText)
+                    defaults.set(turns, forKey: key)
+                    self.currentTranscript = turns
+                    self.statusMessage = "Ready"
+                    self.isBusy = false
+                    AssistantService.shared.speak(replyText)
+                    return
+                }
 
                 // 2. Action or Chat Dispatch
                 var reply = ""

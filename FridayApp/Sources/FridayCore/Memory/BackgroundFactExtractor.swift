@@ -59,8 +59,24 @@ public final class WorkingMemoryCache: @unchecked Sendable {
 }
 
 /// Asynchronous background fact and graph triple extractor (zero user latency)
-public final class BackgroundFactExtractor: Sendable {
+public final class BackgroundFactExtractor: @unchecked Sendable {
     public static let shared = BackgroundFactExtractor()
+
+    private let callbackLock = NSLock()
+    private var _onFactSaved: (@Sendable (String) -> Void)?
+
+    public var onFactSaved: (@Sendable (String) -> Void)? {
+        get {
+            callbackLock.lock()
+            defer { callbackLock.unlock() }
+            return _onFactSaved
+        }
+        set {
+            callbackLock.lock()
+            defer { callbackLock.unlock() }
+            _onFactSaved = newValue
+        }
+    }
 
     private init() {}
 
@@ -178,21 +194,25 @@ public final class BackgroundFactExtractor: Sendable {
     ) {
         Task.detached(priority: .utility) {
             let prompt = """
-            [TASK: PERMANENT USER PROFILE FACT EXTRACTION]
-            Extract ONLY enduring, permanent facts about the HUMAN USER explicitly stated by the user themselves in their message (e.g. user's name, email, job, city, or long-term preferences).
+            [TASK: INDUSTRY-STANDARD EPHEMERAL GATE & USER PROFILE MEMORY EXTRACTOR]
+            You are the long-term memory extraction engine for an AI assistant (like ChatGPT Memory or Gemini Saved Info).
 
-            STRICT FILTERING RULES:
-            1. ONLY extract information that the Human User explicitly stated about themselves.
-            2. NEVER extract conversational actions, turn mechanics, or routing (do NOT extract "User asked...", "User spoke to...", "User addressed @...").
-            3. NEVER extract facts about the AI assistant, its persona, or its beliefs (do NOT extract what Kiara, Jarvis, or FRIDAY believes or says).
-            4. NEVER extract conversational roleplay, jokes, banter, or commands (do NOT extract master/slave, mistress, submission, or dominance roleplay).
-            5. NEVER return negative statements (NEVER output "No facts mentioned", "User's name is not stated", or "None").
-            6. If no permanent personal facts about the user were explicitly revealed, return {"facts":[], "triples":[]}.
+            STEP 1: THE EPHEMERAL GATE
+            Classify whether the human user's message explicitly provides an enduring, permanent personal fact about themselves.
+            - Ephemeral Turns (is_durable_user_fact = false): greetings, questions, conversational banter, joking, roleplay (master/slave, mistress, dominance), commands, or opinions on external topics.
+            - Durable Turns (is_durable_user_fact = true): user explicitly discloses their own name, profession, location, family, dietary preference, persistent tech stack, or long-term identity.
+
+            STEP 2: EXTRACTION (Only if is_durable_user_fact is true)
+            - Extract atomic facts strictly anchored to the Human User (e.g. "User's name is Sharnabh", "The user identifies as a man").
+            - NEVER extract facts about the AI assistant, its persona, or its beliefs.
+            - NEVER output negative facts (e.g. "not stated", "unknown").
+            - If is_durable_user_fact is false, output: {"is_durable_user_fact": false, "facts": [], "triples": []}
 
             Output JSON only in this format:
             {
+              "is_durable_user_fact": true,
               "facts": [{"text": "User's name is Sharnabh", "scope": "shared"}],
-              "triples": [{"subject":"User", "predicate":"name", "object":"Sharnabh", "scope":"shared"}],
+              "triples": [{"subject": "User", "predicate": "name", "object": "Sharnabh", "scope": "shared"}],
               "importance": 8
             }
 
@@ -214,6 +234,11 @@ public final class BackgroundFactExtractor: Sendable {
                     return
                 }
 
+                // Ephemeral Gate: Drop conversational turns with no durable user facts
+                if payload.isDurableUserFact == false {
+                    return
+                }
+
                 // 1. Save validated atomic facts with extracted importance
                 let imp = payload.importance ?? 5
                 for item in payload.facts {
@@ -230,6 +255,7 @@ public final class BackgroundFactExtractor: Sendable {
                     let factScope = item.scope ?? (isUserIdentity ? "shared" : scope)
                     try? store.save(factText, scope: factScope, source: "Autonomous Extractor", importance: imp, original: nil)
                     WorkingMemoryCache.shared.invalidate(scope: factScope)
+                    Self.shared.onFactSaved?(factText)
                 }
 
                 // 2. Save validated graph relation triples (GraphRAG)

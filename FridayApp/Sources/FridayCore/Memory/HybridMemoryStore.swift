@@ -122,6 +122,50 @@ public final class HybridMemoryStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // 1. Single-valued attribute superseding for User
+        let subLower = triple.subject.lowercased()
+        let predLower = triple.predicate.lowercased()
+        let singleValuedPredicates: Set<String> = [
+            "name", "has_name", "first_name", "last_name", "full_name",
+            "gender_identity", "gender", "sex",
+            "email", "email_address",
+            "phone", "phone_number",
+            "birth_date", "birthday", "age",
+            "occupation", "job_title", "job", "profession", "employer", "company",
+            "current_city", "residence", "lives_in", "location", "home_town"
+        ]
+
+        if subLower == "user" || subLower == "human", singleValuedPredicates.contains(predLower) {
+            var checkExistingStmt: OpaquePointer?
+            let isNamePred = predLower == "name" || predLower == "has_name"
+            let checkSql = isNamePred
+                ? "SELECT id, object FROM graph_triples WHERE scope = ? AND (lower(subject) = 'user' OR lower(subject) = 'human') AND lower(predicate) IN ('name', 'has_name') LIMIT 1"
+                : "SELECT id, object FROM graph_triples WHERE scope = ? AND (lower(subject) = 'user' OR lower(subject) = 'human') AND lower(predicate) = ? LIMIT 1"
+
+            if sqlite3_prepare_v2(db, checkSql, -1, &checkExistingStmt, nil) == SQLITE_OK, let checkExistingStmt = checkExistingStmt {
+                sqlite3_bind_text(checkExistingStmt, 1, triple.scope, -1, Self.transient)
+                if !isNamePred {
+                    sqlite3_bind_text(checkExistingStmt, 2, predLower, -1, Self.transient)
+                }
+                if sqlite3_step(checkExistingStmt) == SQLITE_ROW {
+                    let existingId = sqlite3_column_int64(checkExistingStmt, 0)
+                    let existingObj = String(cString: sqlite3_column_text(checkExistingStmt, 1))
+                    sqlite3_finalize(checkExistingStmt)
+
+                    if existingObj.caseInsensitiveCompare(triple.object) == .orderedSame {
+                        return // Same value, deduplicated
+                    }
+
+                    // Conflict resolution: supersede old attribute with new object!
+                    let now = Date().timeIntervalSince1970
+                    try write("UPDATE graph_triples SET predicate = ?, object = ?, confidence = ?, created_at = ? WHERE id = ?",
+                              [triple.predicate, triple.object, String(triple.confidence), String(now), String(existingId)])
+                    return
+                }
+                sqlite3_finalize(checkExistingStmt)
+            }
+        }
+
         // Deduplication check: do not insert identical triples
         var checkStmt: OpaquePointer?
         let checkSql = "SELECT id FROM graph_triples WHERE scope = ? AND subject = ? AND predicate = ? AND object = ? LIMIT 1"
@@ -245,28 +289,62 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 try write("UPDATE memory_metadata SET importance=?, last_accessed_at=? WHERE rowid=?",
                           [String(importance), String(now), String(old.id)])
             } else {
-                // Deduplication check: if memory text already exists in this scope, update timestamp/importance and don't duplicate
-                var checkStmt: OpaquePointer?
-                let checkSql = "SELECT rowid FROM memories WHERE scope = ? AND body = ? LIMIT 1"
-                var existingId: Int64? = nil
-                if sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nil) == SQLITE_OK, let checkStmt = checkStmt {
-                    sqlite3_bind_text(checkStmt, 1, scope, -1, Self.transient)
-                    sqlite3_bind_text(checkStmt, 2, text, -1, Self.transient)
-                    if sqlite3_step(checkStmt) == SQLITE_ROW {
-                        existingId = sqlite3_column_int64(checkStmt, 0)
+                // 1. Conflict resolution / Superseding: check if an identity memory with the same attribute prefix exists
+                let lowerText = text.lowercased()
+                let identityPrefixes = [
+                    "user's name is", "user is named", "user identifies as a", "the user identifies as a",
+                    "user's email is", "user's job is", "user works as", "the user works as",
+                    "user lives in", "the user lives in", "user's city is", "user's age is"
+                ]
+
+                var supersededId: Int64? = nil
+                for prefix in identityPrefixes {
+                    if lowerText.hasPrefix(prefix) {
+                        var pStmt: OpaquePointer?
+                        let pSql = "SELECT rowid FROM memories WHERE scope = ? AND lower(body) LIKE ? LIMIT 1"
+                        if sqlite3_prepare_v2(db, pSql, -1, &pStmt, nil) == SQLITE_OK, let pStmt = pStmt {
+                            sqlite3_bind_text(pStmt, 1, scope, -1, Self.transient)
+                            sqlite3_bind_text(pStmt, 2, "\(prefix)%", -1, Self.transient)
+                            if sqlite3_step(pStmt) == SQLITE_ROW {
+                                supersededId = sqlite3_column_int64(pStmt, 0)
+                            }
+                            sqlite3_finalize(pStmt)
+                        }
+                        if supersededId != nil { break }
                     }
-                    sqlite3_finalize(checkStmt)
                 }
 
-                if let existing = existingId {
-                    targetRowid = existing
-                    try write("UPDATE memory_metadata SET importance=max(importance, ?), last_accessed_at=? WHERE rowid=?",
-                              [String(importance), String(now), String(existing)])
+                if let supId = supersededId {
+                    // Update/supersede existing attribute memory in-place
+                    targetRowid = supId
+                    try write("UPDATE memories SET body=?, source=?, revision=? WHERE rowid=?",
+                              [text, source, revision, String(supId)])
+                    try write("UPDATE memory_metadata SET importance=?, last_accessed_at=? WHERE rowid=?",
+                              [String(importance), String(now), String(supId)])
                 } else {
-                    try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
-                    targetRowid = sqlite3_last_insert_rowid(db)
-                    try write("INSERT OR REPLACE INTO memory_metadata(rowid, importance, created_at, last_accessed_at) VALUES(?,?,?,?)",
-                              [String(targetRowid), String(importance), String(now), String(now)])
+                    // Deduplication check: if memory text already exists in this scope, update timestamp/importance and don't duplicate
+                    var checkStmt: OpaquePointer?
+                    let checkSql = "SELECT rowid FROM memories WHERE scope = ? AND body = ? LIMIT 1"
+                    var existingId: Int64? = nil
+                    if sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nil) == SQLITE_OK, let checkStmt = checkStmt {
+                        sqlite3_bind_text(checkStmt, 1, scope, -1, Self.transient)
+                        sqlite3_bind_text(checkStmt, 2, text, -1, Self.transient)
+                        if sqlite3_step(checkStmt) == SQLITE_ROW {
+                            existingId = sqlite3_column_int64(checkStmt, 0)
+                        }
+                        sqlite3_finalize(checkStmt)
+                    }
+
+                    if let existing = existingId {
+                        targetRowid = existing
+                        try write("UPDATE memory_metadata SET importance=max(importance, ?), last_accessed_at=? WHERE rowid=?",
+                                  [String(importance), String(now), String(existing)])
+                    } else {
+                        try write("INSERT INTO memories(scope,body,source,revision,pinned) VALUES(?,?,?,?,'0')", args)
+                        targetRowid = sqlite3_last_insert_rowid(db)
+                        try write("INSERT OR REPLACE INTO memory_metadata(rowid, importance, created_at, last_accessed_at) VALUES(?,?,?,?)",
+                                  [String(targetRowid), String(importance), String(now), String(now)])
+                    }
                 }
             }
 
@@ -408,6 +486,63 @@ public final class HybridMemoryStore: @unchecked Sendable {
             try? exec("ROLLBACK")
             throw error
         }
+    }
+
+    public func deleteMatching(topic: String, scope: String = "all") throws -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let clean = topic.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !clean.isEmpty else { return [] }
+
+        // Find matching memories
+        var selectSql = "SELECT m.rowid, m.body FROM memories m WHERE (lower(m.body) LIKE ?"
+        let wildcard = "%\(clean)%"
+        var args = [wildcard]
+        if scope != "all" {
+            selectSql += " AND m.scope IN ('shared', ?))"
+            args.append(scope)
+        } else {
+            selectSql += ")"
+        }
+
+        let stmt = try statement(selectSql, args)
+        defer { sqlite3_finalize(stmt) }
+
+        var matchingIds = [Int64]()
+        var matchingBodies = [String]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let body = String(cString: sqlite3_column_text(stmt, 1))
+            matchingIds.append(id)
+            matchingBodies.append(body)
+        }
+
+        // Delete matched memories & corresponding vectors/metadata
+        try exec("BEGIN IMMEDIATE")
+        do {
+            for id in matchingIds {
+                try write("DELETE FROM memories WHERE rowid=?", [String(id)])
+                try write("DELETE FROM memory_vectors WHERE rowid=?", [String(id)])
+                try write("DELETE FROM memory_metadata WHERE rowid=?", [String(id)])
+            }
+
+            // Delete matching graph triples
+            var tripleSql = "DELETE FROM graph_triples WHERE (lower(subject) LIKE ? OR lower(predicate) LIKE ? OR lower(object) LIKE ?)"
+            var tripleArgs = [wildcard, wildcard, wildcard]
+            if scope != "all" {
+                tripleSql += " AND scope IN ('shared', ?)"
+                tripleArgs.append(scope)
+            }
+            try write(tripleSql, tripleArgs)
+
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+
+        return matchingBodies
     }
 
     // MARK: - Stanford Generative Agents Composite Search
