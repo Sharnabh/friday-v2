@@ -37,6 +37,30 @@ public final class ScreenInferenceRouter {
     }
 
     public static func routeQuestion(_ question: String, history: [String], hasPreviousCapture: Bool, provider: String, model: String) throws -> ScreenRoute {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        // 1. Fast-path conversational greetings & assistant persona inquiries
+        let isConversation = lower == "hi" || lower == "hello" || lower == "heyy" || lower == "hey" ||
+                             lower.contains("tell me about yourself") ||
+                             lower.contains("who are you") ||
+                             lower.contains("what is your name") ||
+                             lower.contains("what's your name") ||
+                             lower.contains("introduce yourself") ||
+                             lower.contains("what can you do") ||
+                             lower.contains("how are you") ||
+                             lower.contains("what is my name") ||
+                             lower.contains("what's my name") ||
+                             lower.contains("who am i")
+
+        // Explicit screen inspection keywords
+        let screenKeywords = ["screen", "window", "display", "active window", "look at", "what do you see", "read this", "read the screen", "on my screen"]
+        let hasExplicitScreenRequest = screenKeywords.contains { lower.contains($0) }
+
+        if isConversation && !hasExplicitScreenRequest {
+            return ScreenRoute(source: .chat, mode: .answer)
+        }
+
         let request: [String: Any] = [
             "operation": "route",
             "question": question,
