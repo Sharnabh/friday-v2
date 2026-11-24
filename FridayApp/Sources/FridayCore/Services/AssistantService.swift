@@ -45,7 +45,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         botInstructions: String,
         onChunk: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        var args = ["chat"]
+        var args = ["chat", "--quiet", "--reasoning", "none"]
         if !provider.isEmpty { args += ["--provider", provider] }
         if !model.isEmpty { args += ["--model", model] }
 
@@ -78,6 +78,10 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         try process.run()
 
         for try await line in outHandle.bytes.lines {
+            // Strip out internal debug headers or session footer markers if present
+            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") {
+                continue
+            }
             accumulated += line + "\n"
             onChunk(line + "\n")
         }
