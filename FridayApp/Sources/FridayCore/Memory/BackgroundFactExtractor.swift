@@ -84,7 +84,7 @@ public final class BackgroundFactExtractor: Sendable {
 
             do {
                 let hermes = NSHomeDirectory() + "/.local/bin/hermes"
-                var args = ["chat", "--quiet"]
+                var args = ["chat", "--quiet", "--reasoning", "none"]
                 if !provider.isEmpty { args += ["--provider", provider] }
                 if !model.isEmpty { args += ["--model", model] }
                 args += ["-q", prompt]

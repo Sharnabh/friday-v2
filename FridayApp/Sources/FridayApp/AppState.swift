@@ -427,6 +427,19 @@ public final class AppState: ObservableObject {
                         }
                         statusMessage = "Ready"
                         isBusy = false
+
+                        // Autonomous Background Fact & Graph Triple Extraction for Group turns
+                        if let store = self.memoryStore {
+                            let lastReply = turns.last ?? ""
+                            BackgroundFactExtractor.shared.processTurn(
+                                userPrompt: text,
+                                assistantResponse: lastReply,
+                                scope: self.memoryScope,
+                                store: store,
+                                provider: self.provider,
+                                model: self.model
+                            )
+                        }
                         return
                     } else {
                         // Fast LRU Working Memory Cache & Hybrid Context Retrieval
