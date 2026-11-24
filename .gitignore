@@ -11,6 +11,8 @@
 *.dSYM
 *.ipa
 outputs/*.app
+FridayApp/.build/
+.build/
 
 # Mach-O test binaries in work/
 work/Friday-*
