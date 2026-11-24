@@ -748,6 +748,406 @@ struct ChatView: View {
     }
 }
 
+// MARK: - Markdown Parser & Formatted Views
+
+struct OrderedListItem: Equatable, Identifiable {
+    let id = UUID()
+    let number: String
+    let text: String
+
+    static func == (lhs: OrderedListItem, rhs: OrderedListItem) -> Bool {
+        lhs.number == rhs.number && lhs.text == rhs.text
+    }
+}
+
+enum MarkdownBlock: Equatable {
+    case heading(level: Int, text: String)
+    case codeBlock(language: String, code: String)
+    case quote(text: String)
+    case unorderedList(items: [String])
+    case orderedList(items: [OrderedListItem])
+    case table(headers: [String], rows: [[String]])
+    case divider
+    case paragraph(text: String)
+}
+
+func parseMarkdown(_ input: String) -> [MarkdownBlock] {
+    var blocks: [MarkdownBlock] = []
+    let lines = input.components(separatedBy: "\n")
+    var i = 0
+    let count = lines.count
+
+    while i < count {
+        let line = lines[i]
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        if trimmed.isEmpty {
+            i += 1
+            continue
+        }
+
+        // Fenced code block (```lang ... ```)
+        if trimmed.hasPrefix("```") {
+            let lang = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            var codeLines: [String] = []
+            i += 1
+            while i < count {
+                let codeLine = lines[i]
+                if codeLine.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    i += 1
+                    break
+                }
+                codeLines.append(codeLine)
+                i += 1
+            }
+            blocks.append(.codeBlock(language: lang.isEmpty ? "code" : lang, code: codeLines.joined(separator: "\n")))
+            continue
+        }
+
+        // Horizontal rule
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            blocks.append(.divider)
+            i += 1
+            continue
+        }
+
+        // Headings (# Heading)
+        if trimmed.hasPrefix("#") {
+            var level = 0
+            for char in trimmed {
+                if char == "#" { level += 1 } else { break }
+            }
+            if level <= 6 && trimmed.count > level && trimmed[trimmed.index(trimmed.startIndex, offsetBy: level)] == " " {
+                let hText = String(trimmed.dropFirst(level + 1)).trimmingCharacters(in: .whitespaces)
+                blocks.append(.heading(level: level, text: hText))
+                i += 1
+                continue
+            }
+        }
+
+        // Blockquotes (> Quote)
+        if trimmed.hasPrefix(">") {
+            var quoteLines: [String] = []
+            while i < count {
+                let qLine = lines[i].trimmingCharacters(in: .whitespaces)
+                if qLine.hasPrefix(">") {
+                    let text = qLine.hasPrefix("> ") ? String(qLine.dropFirst(2)) : String(qLine.dropFirst(1))
+                    quoteLines.append(text)
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            blocks.append(.quote(text: quoteLines.joined(separator: "\n")))
+            continue
+        }
+
+        // Markdown Table (| Header 1 | Header 2 |)
+        if trimmed.hasPrefix("|") && trimmed.hasSuffix("|") && trimmed.contains("|") {
+            var tableLines: [String] = []
+            while i < count {
+                let tLine = lines[i].trimmingCharacters(in: .whitespaces)
+                if tLine.hasPrefix("|") && tLine.hasSuffix("|") {
+                    tableLines.append(tLine)
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            if tableLines.count >= 2 {
+                let parseRow: (String) -> [String] = { r in
+                    let parts = r.split(separator: "|", omittingEmptySubsequences: false)
+                    return parts.dropFirst().dropLast().map { $0.trimmingCharacters(in: .whitespaces) }
+                }
+                let headers = parseRow(tableLines[0])
+                var rows: [[String]] = []
+                for rowIdx in 2..<tableLines.count {
+                    let row = parseRow(tableLines[rowIdx])
+                    if !row.isEmpty && !row.allSatisfy({ $0.contains("-") }) {
+                        rows.append(row)
+                    }
+                }
+                blocks.append(.table(headers: headers, rows: rows))
+                continue
+            }
+        }
+
+        // Unordered list (- item, * item, • item)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
+            var listItems: [String] = []
+            while i < count {
+                let rawLine = lines[i]
+                let lTrimmed = rawLine.trimmingCharacters(in: .whitespaces)
+                if lTrimmed.isEmpty {
+                    break
+                }
+                if lTrimmed.hasPrefix("- ") || lTrimmed.hasPrefix("* ") || lTrimmed.hasPrefix("• ") {
+                    let item = String(lTrimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                    listItems.append(item)
+                    i += 1
+                } else if rawLine.hasPrefix("  ") && !listItems.isEmpty {
+                    listItems[listItems.count - 1] += "\n" + lTrimmed
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            blocks.append(.unorderedList(items: listItems))
+            continue
+        }
+
+        // Ordered list (1. item)
+        let firstWord = trimmed.prefix(while: { $0.isNumber || $0 == "." })
+        if firstWord.hasSuffix(".") && trimmed.count > firstWord.count && trimmed[trimmed.index(trimmed.startIndex, offsetBy: firstWord.count)] == " " {
+            var listItems: [OrderedListItem] = []
+            while i < count {
+                let rawLine = lines[i]
+                let lTrimmed = rawLine.trimmingCharacters(in: .whitespaces)
+                if lTrimmed.isEmpty {
+                    break
+                }
+                let numWord = lTrimmed.prefix(while: { $0.isNumber || $0 == "." })
+                if numWord.hasSuffix(".") && lTrimmed.count > numWord.count && lTrimmed[lTrimmed.index(lTrimmed.startIndex, offsetBy: numWord.count)] == " " {
+                    let numStr = String(numWord)
+                    let itemText = String(lTrimmed.dropFirst(numWord.count + 1)).trimmingCharacters(in: .whitespaces)
+                    listItems.append(OrderedListItem(number: numStr, text: itemText))
+                    i += 1
+                } else if rawLine.hasPrefix("  ") && !listItems.isEmpty {
+                    let last = listItems.removeLast()
+                    listItems.append(OrderedListItem(number: last.number, text: last.text + "\n" + lTrimmed))
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            blocks.append(.orderedList(items: listItems))
+            continue
+        }
+
+        // Regular paragraph: gather consecutive lines until empty line or special block
+        var paraLines: [String] = []
+        while i < count {
+            let pLine = lines[i]
+            let pTrimmed = pLine.trimmingCharacters(in: .whitespaces)
+            if pTrimmed.isEmpty || pTrimmed.hasPrefix("```") || pTrimmed.hasPrefix("#") || pTrimmed.hasPrefix(">") || pTrimmed.hasPrefix("- ") || pTrimmed.hasPrefix("* ") || pTrimmed.hasPrefix("• ") || (pTrimmed.hasPrefix("|") && pTrimmed.hasSuffix("|")) {
+                break
+            }
+            let firstW = pTrimmed.prefix(while: { $0.isNumber || $0 == "." })
+            if firstW.hasSuffix(".") && pTrimmed.count > firstW.count && pTrimmed[pTrimmed.index(pTrimmed.startIndex, offsetBy: firstW.count)] == " " {
+                break
+            }
+            paraLines.append(pLine)
+            i += 1
+        }
+        if !paraLines.isEmpty {
+            blocks.append(.paragraph(text: paraLines.joined(separator: "\n")))
+        }
+    }
+
+    return blocks
+}
+
+struct MarkdownInlineText: View {
+    let text: String
+    let isUser: Bool
+    var font: Font = .system(size: 14)
+    @Environment(\.colorScheme) var colorScheme
+
+    var attributed: AttributedString {
+        if var attr = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            for run in attr.runs {
+                if run.inlinePresentationIntent?.contains(.code) == true {
+                    attr[run.range].backgroundColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+                }
+            }
+            return attr
+        }
+        return AttributedString(text)
+    }
+
+    var body: some View {
+        Text(attributed)
+            .font(font)
+            .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme) : WhatsAppTheme.botText(for: colorScheme))
+            .textSelection(.enabled)
+    }
+}
+
+struct MarkdownCodeBlockView: View {
+    let language: String
+    let code: String
+    let isUser: Bool
+    @State private var isCopied = false
+    @Environment(\.colorScheme) var colorScheme
+
+    var headerBg: Color {
+        if isUser {
+            return colorScheme == .dark ? Color(white: 0.12).opacity(0.8) : Color.white.opacity(0.4)
+        } else {
+            return colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.90)
+        }
+    }
+
+    var bodyBg: Color {
+        if isUser {
+            return colorScheme == .dark ? Color(white: 0.08).opacity(0.8) : Color.white.opacity(0.6)
+        } else {
+            return colorScheme == .dark ? Color(white: 0.08) : Color(white: 0.96)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(language.uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme).opacity(0.7) : .secondary)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code, forType: .string)
+                    isCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        isCopied = false
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10))
+                        Text(isCopied ? "Copied" : "Copy")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(isCopied ? .green : (isUser ? WhatsAppTheme.userText(for: colorScheme).opacity(0.7) : .secondary))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(headerBg)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(code)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme) : (colorScheme == .dark ? Color(white: 0.92) : Color(white: 0.12)))
+                    .padding(10)
+                    .textSelection(.enabled)
+            }
+        }
+        .background(bodyBg)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+    }
+}
+
+struct MarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+    @Environment(\.colorScheme) var colorScheme
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                GridRow {
+                    ForEach(0..<headers.count, id: \.self) { idx in
+                        Text(headers[idx])
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.primary)
+                    }
+                }
+                Divider()
+                ForEach(0..<rows.count, id: \.self) { rIdx in
+                    GridRow {
+                        ForEach(0..<rows[rIdx].count, id: \.self) { cIdx in
+                            Text(rows[rIdx][cIdx])
+                                .font(.system(size: 12))
+                                .foregroundColor(.primary)
+                        }
+                    }
+                    if rIdx < rows.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+            .padding(10)
+            .background(colorScheme == .dark ? Color(white: 0.12) : Color(white: 0.95))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
+        }
+    }
+}
+
+struct MarkdownMessageView: View {
+    let text: String
+    let isUser: Bool
+
+    var blocks: [MarkdownBlock] {
+        parseMarkdown(text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(0..<blocks.count, id: \.self) { idx in
+                switch blocks[idx] {
+                case .heading(let level, let hText):
+                    MarkdownInlineText(
+                        text: hText,
+                        isUser: isUser,
+                        font: level == 1 ? .title3.bold() : (level == 2 ? .headline.bold() : .subheadline.bold())
+                    )
+                    .padding(.top, 2)
+                case .codeBlock(let language, let code):
+                    MarkdownCodeBlockView(language: language, code: code, isUser: isUser)
+                case .quote(let qText):
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(WhatsAppTheme.emerald.opacity(0.85))
+                            .frame(width: 3)
+                        MarkdownInlineText(text: qText, isUser: isUser)
+                            .italic()
+                    }
+                    .padding(.vertical, 2)
+                case .unorderedList(let items):
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(0..<items.count, id: \.self) { itemIdx in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("•")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(WhatsAppTheme.emerald)
+                                MarkdownInlineText(text: items[itemIdx], isUser: isUser)
+                            }
+                        }
+                    }
+                case .orderedList(let items):
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(items) { item in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(item.number)
+                                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(WhatsAppTheme.emerald)
+                                MarkdownInlineText(text: item.text, isUser: isUser)
+                            }
+                        }
+                    }
+                case .table(let headers, let rows):
+                    MarkdownTableView(headers: headers, rows: rows)
+                case .divider:
+                    Divider().padding(.vertical, 2)
+                case .paragraph(let pText):
+                    MarkdownInlineText(text: pText, isUser: isUser)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - WhatsApp Chat Bubble
 
 struct ChatBubble: View {
@@ -782,10 +1182,7 @@ struct ChatBubble: View {
                             .padding(.bottom, 1)
                     }
 
-                    Text(bodyText)
-                        .font(.system(size: 14))
-                        .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme) : WhatsAppTheme.botText(for: colorScheme))
-                        .textSelection(.enabled)
+                    MarkdownMessageView(text: bodyText, isUser: isUser)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -811,7 +1208,7 @@ struct ChatBubble: View {
             .background(isUser ? WhatsAppTheme.userBubble(for: colorScheme) : WhatsAppTheme.botBubble(for: colorScheme))
             .cornerRadius(10)
             .shadow(color: Color.black.opacity(0.06), radius: 1, x: 0, y: 1)
-            .frame(maxWidth: 540, alignment: isUser ? .trailing : .leading)
+            .frame(maxWidth: 620, alignment: isUser ? .trailing : .leading)
 
             if !isUser { Spacer(minLength: 40) }
         }
