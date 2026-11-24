@@ -99,6 +99,68 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         return Self.cleanHermesOutput(accumulated)
     }
 
+    /// Context-aware turn orchestrator: decides which candidate bot(s) should speak given the conversation context and user message
+    public func resolveRespondingBots(
+        transcript: [String],
+        userMessage: String,
+        candidateBots: [(name: String, instructions: String)],
+        provider: String,
+        model: String
+    ) async throws -> [String] {
+        guard candidateBots.count > 1 else {
+            return candidateBots.map { $0.name }
+        }
+
+        let botListDesc = candidateBots.map { "- \($0.name): \($0.instructions.isEmpty ? "AI Assistant" : String($0.instructions.prefix(120)))" }.joined(separator: "\n")
+        let transcriptContext = transcript.suffix(6).joined(separator: "\n\n")
+
+        let prompt = """
+        You are a multi-agent conversation orchestrator.
+        Available candidate bots:
+        \(botListDesc)
+
+        Recent conversation:
+        \(transcriptContext.isEmpty ? "(No previous messages)" : transcriptContext)
+
+        User's latest message:
+        "\(userMessage)"
+
+        Task: Determine which bot(s) should speak in response to the user's latest message and in what order.
+        Principles:
+        - If the user addresses or asks a specific bot exclusively (e.g. "@Kiara tell me this only", or "@Kiara what is X?"), select ONLY that bot.
+        - If the user asks one bot to delegate/hand off a task to another bot (e.g. "BotA, ask @BotB to write a poem"), include the delegating bot and/or the delegated bot in execution order.
+        - If the user cites what one bot said to ask others (e.g. "@Kiara said X, what do you think?"), select the other relevant bot(s).
+        - If addressing multiple bots or the group generally, select the relevant bots that should respond.
+
+        Respond with a JSON array of exact bot names ONLY, for example ["Kiara"] or ["Jarvis", "Kiara"].
+        """
+
+        do {
+            let raw = try await executeRawChat(prompt: prompt, provider: provider, model: model)
+            guard let start = raw.firstIndex(of: "["),
+                  let end = raw.lastIndex(of: "]"), start <= end,
+                  let data = raw[start...end].data(using: .utf8),
+                  let names = try? JSONDecoder().decode([String].self, from: data),
+                  !names.isEmpty else {
+                let mentioned = candidateBots.map { $0.name }.filter { userMessage.localizedCaseInsensitiveContains("@" + $0) }
+                return mentioned.isEmpty ? candidateBots.map { $0.name } : mentioned
+            }
+
+            var validated = [String]()
+            for name in names {
+                if let match = candidateBots.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                    if !validated.contains(match.name) {
+                        validated.append(match.name)
+                    }
+                }
+            }
+            return validated.isEmpty ? candidateBots.map { $0.name } : validated
+        } catch {
+            let mentioned = candidateBots.map { $0.name }.filter { userMessage.localizedCaseInsensitiveContains("@" + $0) }
+            return mentioned.isEmpty ? candidateBots.map { $0.name } : mentioned
+        }
+    }
+
     /// Executes inference with streaming callback chunks
     public func streamChat(
         prompt: String,

@@ -347,6 +347,55 @@ struct ChatView: View {
 
             Divider()
 
+            // Mention Suggestions Popup
+            if state.currentMentionQuery != nil && !state.matchingMentionBots.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Mention a Bot")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("tap to select")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+
+                    Divider().padding(.horizontal, 6)
+
+                    ForEach(state.matchingMentionBots) { bot in
+                        Button {
+                            state.insertMention(bot)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: bot.id.isEmpty ? "sparkles" : "person.circle.fill")
+                                    .foregroundColor(.accentColor)
+                                Text("@\(bot.name)")
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Text(bot.role)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(.ultraThinMaterial)
+                .cornerRadius(10)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25)))
+                .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+                .padding(.horizontal)
+                .padding(.bottom, -6)
+            }
+
             // Message Input bar
             HStack(spacing: 10) {
                 TextField("Ask Friday, inspect screen, or command Mac…", text: $state.inputMessage)

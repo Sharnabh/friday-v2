@@ -235,6 +235,51 @@ public final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - @ Mention Suggestions & Auto-Complete
+
+    public var mentionableBots: [MentionableBot] {
+        var list = [MentionableBot(id: "", name: fridayName, role: "Core Assistant")]
+        for b in bots {
+            let roleSnippet = b.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            list.append(MentionableBot(
+                id: b.id,
+                name: b.name,
+                role: roleSnippet.isEmpty ? "AI Assistant" : String(roleSnippet.prefix(50))
+            ))
+        }
+        return list
+    }
+
+    public var currentMentionQuery: String? {
+        guard let lastWord = inputMessage.components(separatedBy: .whitespacesAndNewlines).last,
+              lastWord.hasPrefix("@") else {
+            return nil
+        }
+        return String(lastWord.dropFirst())
+    }
+
+    public var matchingMentionBots: [MentionableBot] {
+        guard let query = currentMentionQuery?.lowercased() else { return [] }
+        if query.isEmpty {
+            return mentionableBots
+        }
+        return mentionableBots.filter { $0.name.lowercased().contains(query) }
+    }
+
+    public func insertMention(_ bot: MentionableBot) {
+        guard let lastWord = inputMessage.components(separatedBy: .whitespacesAndNewlines).last,
+              lastWord.hasPrefix("@") else {
+            inputMessage += "@" + bot.name + " "
+            return
+        }
+        var words = inputMessage.components(separatedBy: " ")
+        if !words.isEmpty && words.last?.hasPrefix("@") == true {
+            words.removeLast()
+        }
+        words.append("@" + bot.name)
+        inputMessage = words.joined(separator: " ") + " "
+    }
+
     public func deleteBot(id: String) {
         guard !id.isEmpty else { return }
         var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
@@ -468,111 +513,156 @@ public final class AppState: ObservableObject {
                     }
 
                 case .chat:
+                    // 1. Working Memory & Identity Context Retrieval
+                    var context = ""
+                    let cacheKey = self.memoryScope + "::" + text
+                    if let cached = WorkingMemoryCache.shared.get(key: cacheKey) {
+                        context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
+                    } else if let store = memoryStore {
+                        var contextLines = [String]()
+
+                        let lowerText = text.lowercased()
+                        let isIdentityQuery = lowerText.contains("my name") || lowerText.contains("who am i") ||
+                                             lowerText.contains("who i am") || lowerText.contains("know me") ||
+                                             lowerText.contains("what's my name")
+
+                        // Graph Triples Join (GraphRAG)
+                        let tripleQuery = isIdentityQuery ? "name user" : text
+                        if let triples = try? store.queryTriples(query: tripleQuery, scope: memoryScope, limit: 3), !triples.isEmpty {
+                            contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
+                        }
+                        // Hybrid Stanford-Scored Semantic Memories
+                        let searchQuery = isIdentityQuery ? "user name" : text
+                        if let results = try? store.search(searchQuery, scope: memoryScope, limit: 3) {
+                            WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
+                            contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
+                        }
+                        context = contextLines.joined(separator: "\n")
+                    }
+
+                    // 2. Discover Candidate Bots (Group or Active + @Mentions)
+                    struct CandidateBot {
+                        let id: String
+                        let name: String
+                        let instructions: String
+                        let provider: String
+                        let model: String
+                    }
+
+                    var candidates = [CandidateBot]()
+
                     if isGroupSelected {
-                        // Multi-Bot Group Conversation
                         for memberId in groupMembers {
                             let memberName = memberId.isEmpty ? fridayName : (bots.first(where: { $0.id == memberId })?.name ?? "FRIDAY")
                             let memberInstr = memberId.isEmpty ? fridayInstructions : (bots.first(where: { $0.id == memberId })?.instructions ?? "")
                             let prefix = memberId.isEmpty ? "" : "bot." + memberId + "."
                             let botProvider = defaults.string(forKey: prefix + "chatProvider") ?? provider
                             let botModel = defaults.string(forKey: prefix + "chatModel") ?? model
-                            
-                            statusMessage = "\(memberName) is replying…"
-                            
+                            candidates.append(CandidateBot(id: memberId, name: memberName, instructions: memberInstr, provider: botProvider, model: botModel))
+                        }
+                    } else {
+                        // 1-on-1 Chat: Active bot is primary
+                        candidates.append(CandidateBot(id: activeBotId, name: botName, instructions: botInstr, provider: provider, model: model))
+
+                        // Check if any other bots were @mentioned for delegation or collaboration
+                        for mb in mentionableBots where mb.name.caseInsensitiveCompare(botName) != .orderedSame {
+                            if text.localizedCaseInsensitiveContains("@" + mb.name) {
+                                let mbInstr = mb.id.isEmpty ? fridayInstructions : (bots.first(where: { $0.id == mb.id })?.instructions ?? "")
+                                let prefix = mb.id.isEmpty ? "" : "bot." + mb.id + "."
+                                let bProvider = defaults.string(forKey: prefix + "chatProvider") ?? provider
+                                let bModel = defaults.string(forKey: prefix + "chatModel") ?? model
+                                candidates.append(CandidateBot(id: mb.id, name: mb.name, instructions: mbInstr, provider: bProvider, model: bModel))
+                            }
+                        }
+                    }
+
+                    // 3. Execution: Single Bot or Multi-Agent Turn Orchestration
+                    if candidates.count == 1 {
+                        let single = candidates[0]
+                        statusMessage = "Streaming response…"
+                        reply = try await AssistantService.shared.streamChat(
+                            prompt: text,
+                            provider: single.provider,
+                            model: single.model,
+                            sessionID: sessionID,
+                            contextMemory: context,
+                            botName: single.name,
+                            botInstructions: single.instructions,
+                            onChunk: { _ in }
+                        )
+                        turns.append(single.name + "\n" + reply)
+                        defaults.set(turns, forKey: key)
+                        self.currentTranscript = turns
+                        self.statusMessage = "Ready"
+                        self.isBusy = false
+                        AssistantService.shared.speak(reply)
+                    } else {
+                        statusMessage = "Orchestrating agent collaboration…"
+                        let respondingNames = try await AssistantService.shared.resolveRespondingBots(
+                            transcript: turns,
+                            userMessage: text,
+                            candidateBots: candidates.map { ($0.name, $0.instructions) },
+                            provider: provider,
+                            model: model
+                        )
+
+                        for targetName in respondingNames {
+                            guard let target = candidates.first(where: { $0.name.caseInsensitiveCompare(targetName) == .orderedSame }) else { continue }
+
+                            statusMessage = "\(target.name) is replying…"
                             let contextTurns = turns.suffix(16).joined(separator: "\n\n")
                             let groupPrompt = """
-                            You are \(memberName) in a group conversation. Respond naturally and directly to the conversation topic in your own persona. Do not meta-explain your role or say "Understood, you've got me running as \(memberName)". Jump right into your thoughts and perspective.
-                            \(memberInstr.isEmpty ? "" : "Persona instructions: " + memberInstr)
+                            You are \(target.name), an AI assistant. \(target.instructions)
+                            \(context.isEmpty ? "" : "Durable User Profile & Memory Context:\n" + context + "\n\n")
+                            You are participating in this conversation. Respond naturally, directly, and in your own persona.
+                            If a task was delegated to you or another bot spoke, address it seamlessly.
+                            Never repeat meta-descriptions or reasoning preambles.
 
-                            Group conversation so far:
+                            Conversation transcript so far:
                             \(contextTurns)
                             """
 
                             let memberReply = try await AssistantService.shared.executeRawChat(
                                 prompt: groupPrompt,
-                                provider: botProvider,
-                                model: botModel
+                                provider: target.provider,
+                                model: target.model
                             )
-                            turns.append(memberName + "\n" + memberReply)
+                            turns.append(target.name + "\n" + memberReply)
                             defaults.set(turns, forKey: key)
                             self.currentTranscript = turns
                         }
+
                         statusMessage = "Ready"
-                        isBusy = false
-
-                        // Autonomous Background Fact & Graph Triple Extraction for Group turns
-                        if let store = self.memoryStore {
-                            let lastReply = turns.last ?? ""
-                            BackgroundFactExtractor.shared.processTurn(
-                                userPrompt: text,
-                                assistantResponse: lastReply,
-                                botName: "Group",
-                                scope: self.memoryScope,
-                                store: store,
-                                provider: self.provider,
-                                model: self.model
-                            )
+                        self.isBusy = false
+                        if let lastTurn = turns.last {
+                            let textToSpeak = lastTurn.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+                            AssistantService.shared.speak(textToSpeak)
                         }
-                        return
-                    } else {
-                        // Fast LRU Working Memory Cache & Hybrid Context Retrieval
-                        var context = ""
-                        let cacheKey = self.memoryScope + "::" + text
-                        if let cached = WorkingMemoryCache.shared.get(key: cacheKey) {
-                            context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
-                        } else if let store = memoryStore {
-                            var contextLines = [String]()
+                    }
 
-                            let lowerText = text.lowercased()
-                            let isIdentityQuery = lowerText.contains("my name") || lowerText.contains("who am i") ||
-                                                 lowerText.contains("who i am") || lowerText.contains("know me") ||
-                                                 lowerText.contains("what's my name")
-
-                            // 1. Graph Triples Join (GraphRAG)
-                            let tripleQuery = isIdentityQuery ? "name user" : text
-                            if let triples = try? store.queryTriples(query: tripleQuery, scope: memoryScope, limit: 3), !triples.isEmpty {
-                                contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
-                            }
-                            // 2. Hybrid Stanford-Scored Semantic Memories
-                            let searchQuery = isIdentityQuery ? "user name" : text
-                            if let results = try? store.search(searchQuery, scope: memoryScope, limit: 3) {
-                                WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
-                                contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
-                            }
-                            context = contextLines.joined(separator: "\n")
-                        }
-                        statusMessage = "Streaming response…"
-                        reply = try await AssistantService.shared.streamChat(
-                            prompt: text,
-                            provider: provider,
-                            model: model,
-                            sessionID: sessionID,
-                            contextMemory: context,
-                            botName: botName,
-                            botInstructions: botInstr,
-                            onChunk: { _ in }
+                    // 4. Autonomous Background Fact & Graph Triple Extraction
+                    if let store = self.memoryStore {
+                        let lastReply = turns.last ?? reply
+                        BackgroundFactExtractor.shared.processTurn(
+                            userPrompt: text,
+                            assistantResponse: lastReply,
+                            botName: isGroupSelected ? "Group" : botName,
+                            scope: self.memoryScope,
+                            store: store,
+                            provider: self.provider,
+                            model: self.model
                         )
                     }
+                    return
                 }
 
-                turns.append(botName + "\n" + reply)
-                defaults.set(turns, forKey: key)
-                self.currentTranscript = turns
-                self.statusMessage = "Ready"
-                self.isBusy = false
-                AssistantService.shared.speak(reply)
-
-                // Autonomous Background Fact & Graph Triple Extraction
-                if let store = self.memoryStore {
-                    BackgroundFactExtractor.shared.processTurn(
-                        userPrompt: text,
-                        assistantResponse: reply,
-                        botName: botName,
-                        scope: self.memoryScope,
-                        store: store,
-                        provider: self.provider,
-                        model: self.model
-                    )
+                if !reply.isEmpty {
+                    turns.append(botName + "\n" + reply)
+                    defaults.set(turns, forKey: key)
+                    self.currentTranscript = turns
+                    self.statusMessage = "Ready"
+                    self.isBusy = false
+                    AssistantService.shared.speak(reply)
                 }
 
             } catch {
