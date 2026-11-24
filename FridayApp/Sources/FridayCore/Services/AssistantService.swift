@@ -133,7 +133,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         provider: String,
         model: String
     ) async throws -> String {
-        var args = ["chat", "--quiet", "--reasoning", "none"]
+        var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
         if !provider.isEmpty { args += ["--provider", provider] }
         if !model.isEmpty { args += ["--model", model] }
         args += ["-q", prompt]
@@ -153,7 +153,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         try process.run()
 
         for try await line in outHandle.bytes.lines {
-            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") {
+            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
                 continue
             }
             accumulated += line + "\n"
@@ -228,6 +228,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
     /// Executes inference with streaming callback chunks
     public func streamChat(
         prompt: String,
+        history: [String] = [],
         provider: String,
         model: String,
         sessionID: String,
@@ -236,21 +237,31 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         botInstructions: String,
         onChunk: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        var args = ["chat", "--quiet", "--reasoning", "none"]
+        var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
         if !provider.isEmpty { args += ["--provider", provider] }
         if !model.isEmpty { args += ["--model", model] }
 
-        let resumeKey = "hermesSession." + sessionID
-        if let id = UserDefaults.standard.string(forKey: resumeKey) {
-            args += ["--resume", id]
-        }
+        let cleanInstructions = botInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveInstructions = cleanInstructions.isEmpty
+            ? "You are a helpful, thoughtful, and intelligent AI assistant."
+            : cleanInstructions
+
+        let recentHistory = history.suffix(8).joined(separator: "\n\n")
 
         let fullPrompt = """
-        You are \(botName), an AI assistant. \(botInstructions)
-        \(contextMemory.isEmpty ? "" : "User Profile & Memory Context:\n" + contextMemory + "\n\n")
-        Always remember: You are \(botName) (the assistant). The person speaking to you is the human User.
-        Respond directly, helpfully, and concisely. Never output internal thought processes, meta-descriptions, or reasoning preambles.
+        [SYSTEM DIRECTIVE: STRICT CHARACTER & ROLEPLAY PERSONA]
+        You are \(botName).
+        Core Identity, Tone, & Instructions:
+        \(effectiveInstructions)
 
+        CRITICAL PERSONA RULES:
+        1. Embody this persona and tone completely. Every perspective, self-description, opinion, and response you provide must authentically reflect your persona (\(effectiveInstructions)).
+        2. When asked about yourself, your background, or your personality, explain who you are through your persona.
+        3. NEVER revert to generic corporate assistant boilerplate (do NOT say "I am an AI assistant built to help with research, writing..." or "I have no feelings/opinions/personality").
+        4. Speak in the first person ("I") directly as \(botName).
+        5. Do not output internal thought commentary, meta-descriptions, or preambles like "Let me respond directly...". Answer directly.
+        \(contextMemory.isEmpty ? "" : "\nDurable User Profile & Memory:\n" + contextMemory + "\n")
+        \(recentHistory.isEmpty ? "" : "Conversation History so far:\n" + recentHistory + "\n\n")
         User:
         \(prompt)
         """
@@ -273,7 +284,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
 
         for try await line in outHandle.bytes.lines {
             // Strip out internal debug headers or session footer markers if present
-            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") {
+            if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
                 continue
             }
             accumulated += line + "\n"
@@ -284,11 +295,6 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
 
         let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         let errText = String(decoding: errData, as: UTF8.self)
-        for line in errText.components(separatedBy: .newlines) {
-            if line.hasPrefix("session_id: ") {
-                UserDefaults.standard.set(String(line.dropFirst(12)), forKey: resumeKey)
-            }
-        }
 
         let cleaned = Self.cleanBotReply(accumulated, botName: botName)
         if process.terminationStatus != 0 && cleaned.isEmpty {

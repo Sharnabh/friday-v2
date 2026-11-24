@@ -218,6 +218,9 @@ public final class AppState: ObservableObject {
             loadBotsAndGroups()
             self.statusMessage = "Updated \(cleanName)"
         }
+        // Invalidate any session cache so updated instructions take effect immediately
+        let resumeKey = "hermesSession." + sessionID
+        defaults.removeObject(forKey: resumeKey)
     }
 
     public func openPersonaEditor(for botId: String? = nil) {
@@ -593,6 +596,7 @@ public final class AppState: ObservableObject {
                         statusMessage = "Streaming response…"
                         reply = try await AssistantService.shared.streamChat(
                             prompt: text,
+                            history: turns,
                             provider: single.provider,
                             model: single.model,
                             sessionID: sessionID,
@@ -626,18 +630,24 @@ public final class AppState: ObservableObject {
                             let otherBots = candidates.filter { $0.name.caseInsensitiveCompare(target.name) != .orderedSame }.map { $0.name }
                             let otherBotsNotice = otherBots.isEmpty ? "" : "Other bots in this conversation: \(otherBots.joined(separator: ", "))."
 
+                            let cleanInstr = target.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let effectiveInstr = cleanInstr.isEmpty ? "You are a helpful, thoughtful, and intelligent AI assistant." : cleanInstr
+
                             let groupPrompt = """
-                            You are \(target.name), an AI assistant. \(target.instructions)
-                            \(context.isEmpty ? "" : "Durable User Profile & Memory Context:\n" + context + "\n\n")
+                            [SYSTEM DIRECTIVE: STRICT CHARACTER & ROLEPLAY PERSONA]
+                            You are \(target.name).
+                            Core Identity, Tone, & Instructions:
+                            \(effectiveInstr)
                             \(otherBotsNotice)
 
                             STRICT MULTI-AGENT COLLABORATION PROTOCOL:
                             1. You are speaking EXCLUSIVELY as \(target.name).
-                            2. NEVER generate responses, simulate dialogue, or write on behalf of any other bot (\(otherBots.joined(separator: ", "))). Each bot is an independent agent and is called in its own separate turn.
-                            3. If the user addressed multiple bots in their message, respond ONLY to the part intended for \(target.name).
-                            4. Respond directly in your own persona. Do not prefix your message with your name (do NOT write "\(target.name):" or "**\(target.name)**:").
-                            5. Do NOT output internal reasoning, thought commentary, or preambles (never write "Let me respond directly...").
-
+                            2. Embody your assigned identity and persona (\(effectiveInstr)) completely in your voice, tone, and worldview.
+                            3. NEVER generate responses, simulate dialogue, or write on behalf of any other bot (\(otherBots.joined(separator: ", "))). Each bot is an independent agent and is called in its own separate turn.
+                            4. If the user addressed multiple bots in their message, respond ONLY to the part intended for \(target.name).
+                            5. Respond directly in your own persona. Do not prefix your message with your name (do NOT write "\(target.name):" or "**\(target.name)**:").
+                            6. Do NOT output internal reasoning, thought commentary, or preambles (never write "Let me respond directly...").
+                            \(context.isEmpty ? "" : "\nDurable User Profile & Memory Context:\n" + context + "\n")
                             Conversation transcript so far:
                             \(contextTurns)
                             """
