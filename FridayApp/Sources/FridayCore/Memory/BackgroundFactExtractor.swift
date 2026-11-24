@@ -72,7 +72,7 @@ public final class BackgroundFactExtractor: Sendable {
         let negativePhrases = [
             "no durable", "not stated", "not mentioned", "nothing mentioned",
             "no facts", "no information", "no personal", "none mentioned",
-            "is not stated", "was not stated", "n/a", "none"
+            "is not stated", "was not stated", "n/a", "none", "unknown", "unspecified"
         ]
         for phrase in negativePhrases {
             if lower.contains(phrase) { return false }
@@ -90,13 +90,35 @@ public final class BackgroundFactExtractor: Sendable {
             if lower.contains(phrase) { return false }
         }
 
-        // 3. Filter out assistant descriptions
+        // 3. Filter out assistant/bot self-descriptions and persona
+        if lower.hasPrefix("kiara ") || lower.hasPrefix("jarvis ") || lower.hasPrefix("friday ") ||
+           lower.hasPrefix("the bot ") || lower.hasPrefix("the assistant ") || lower.hasPrefix("user's assistant") {
+            return false
+        }
         let botPhrases = [
             "ai assistant", "hermes agent", "solar mini", "assistant built",
-            "assistant helps", "tools for browsing", "file reading", "workflow coordination"
+            "assistant helps", "tools for browsing", "file reading", "workflow coordination",
+            "assistant identifies", "assistant believes", "kiara believes", "kiara identifies",
+            "jarvis believes", "bot believes"
         ]
         for phrase in botPhrases {
             if lower.contains(phrase) { return false }
+        }
+
+        // 4. Filter out transient roleplay, banter, and commands
+        let roleplayPhrases = [
+            "mistress", "slave", "dominate", "submissive", "submission", "subordinate",
+            "kink", "roleplay", "bitch", "mercy", "punish", "master"
+        ]
+        for phrase in roleplayPhrases {
+            if lower.contains(phrase) { return false }
+        }
+
+        // 5. Must actually anchor to the human user
+        let hasUserAnchor = lower.hasPrefix("user") || lower.hasPrefix("the user") ||
+                            lower.contains("user's") || lower.contains("user ")
+        if !hasUserAnchor {
+            return false
         }
 
         return true
@@ -109,9 +131,32 @@ public final class BackgroundFactExtractor: Sendable {
 
         guard !subLower.isEmpty && !predLower.isEmpty && !objLower.isEmpty else { return false }
 
-        let ephemeralPreds = ["addressed_to", "is_speaking_with", "speaking_with", "directed_to", "talks_to", "greeted", "asked"]
+        // Subject MUST be the human user
+        let validUserSubjects = ["user", "human", "speaker", "person"]
+        if !validUserSubjects.contains(subLower) && !subLower.hasPrefix("user") {
+            return false
+        }
+
+        // Reject bot subjects
+        let botSubjects = ["kiara", "jarvis", "friday", "assistant", "bot", "ai"]
+        if botSubjects.contains(subLower) { return false }
+
+        // Reject negative objects
+        let negativeObjects = ["not stated", "none", "unknown", "n/a", "not mentioned", "unspecified", "nothing"]
+        for neg in negativeObjects {
+            if objLower == neg || objLower.contains(neg) { return false }
+        }
+
+        // Reject ephemeral predicates
+        let ephemeralPreds = ["addressed_to", "is_speaking_with", "speaking_with", "directed_to", "talks_to", "greeted", "asked", "said"]
         for ep in ephemeralPreds {
             if predLower.contains(ep) { return false }
+        }
+
+        // Reject roleplay terms
+        let roleplayTerms = ["slave", "mistress", "submits_to", "dominates", "master", "subordinate"]
+        for term in roleplayTerms {
+            if predLower.contains(term) || objLower.contains(term) { return false }
         }
 
         if objLower.contains("assistant") || objLower.contains("hermes") || objLower.contains("turn") {
@@ -139,9 +184,10 @@ public final class BackgroundFactExtractor: Sendable {
             STRICT FILTERING RULES:
             1. ONLY extract information that the Human User explicitly stated about themselves.
             2. NEVER extract conversational actions, turn mechanics, or routing (do NOT extract "User asked...", "User spoke to...", "User addressed @...").
-            3. NEVER extract what the AI assistant said about itself, its tools, or its capabilities.
-            4. NEVER return negative statements (NEVER output "No facts mentioned", "User's name is not stated", or "None").
-            5. If no permanent personal facts about the user were explicitly revealed, return {"facts":[], "triples":[]}.
+            3. NEVER extract facts about the AI assistant, its persona, or its beliefs (do NOT extract what Kiara, Jarvis, or FRIDAY believes or says).
+            4. NEVER extract conversational roleplay, jokes, banter, or commands (do NOT extract master/slave, mistress, submission, or dominance roleplay).
+            5. NEVER return negative statements (NEVER output "No facts mentioned", "User's name is not stated", or "None").
+            6. If no permanent personal facts about the user were explicitly revealed, return {"facts":[], "triples":[]}.
 
             Output JSON only in this format:
             {
