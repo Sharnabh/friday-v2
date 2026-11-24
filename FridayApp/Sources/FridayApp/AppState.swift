@@ -434,6 +434,7 @@ public final class AppState: ObservableObject {
                             BackgroundFactExtractor.shared.processTurn(
                                 userPrompt: text,
                                 assistantResponse: lastReply,
+                                botName: "Group",
                                 scope: self.memoryScope,
                                 store: store,
                                 provider: self.provider,
@@ -449,12 +450,20 @@ public final class AppState: ObservableObject {
                             context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
                         } else if let store = memoryStore {
                             var contextLines = [String]()
+
+                            let lowerText = text.lowercased()
+                            let isIdentityQuery = lowerText.contains("my name") || lowerText.contains("who am i") ||
+                                                 lowerText.contains("who i am") || lowerText.contains("know me") ||
+                                                 lowerText.contains("what's my name")
+
                             // 1. Graph Triples Join (GraphRAG)
-                            if let triples = try? store.queryTriples(query: text, scope: memoryScope, limit: 3), !triples.isEmpty {
+                            let tripleQuery = isIdentityQuery ? "name user" : text
+                            if let triples = try? store.queryTriples(query: tripleQuery, scope: memoryScope, limit: 3), !triples.isEmpty {
                                 contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
                             }
                             // 2. Hybrid Stanford-Scored Semantic Memories
-                            if let results = try? store.search(text, scope: memoryScope, limit: 3) {
+                            let searchQuery = isIdentityQuery ? "user name" : text
+                            if let results = try? store.search(searchQuery, scope: memoryScope, limit: 3) {
                                 WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
                                 contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
                             }
@@ -486,6 +495,7 @@ public final class AppState: ObservableObject {
                     BackgroundFactExtractor.shared.processTurn(
                         userPrompt: text,
                         assistantResponse: reply,
+                        botName: botName,
                         scope: self.memoryScope,
                         store: store,
                         provider: self.provider,

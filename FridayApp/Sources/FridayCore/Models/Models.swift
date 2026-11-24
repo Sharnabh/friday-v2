@@ -73,23 +73,63 @@ public struct GraphTriple: Identifiable, Codable, Sendable {
 }
 
 public struct ExtractedFactPayload: Codable, Sendable {
-    public let facts: [String]
-    public let triples: [TriplePayload]
-    public let importance: Int?
+    public struct FactItem: Codable, Sendable {
+        public let text: String
+        public let scope: String?
+
+        public init(text: String, scope: String? = nil) {
+            self.text = text
+            self.scope = scope
+        }
+
+        public init(from decoder: Decoder) throws {
+            if let container = try? decoder.singleValueContainer(),
+               let str = try? container.decode(String.self) {
+                self.text = str
+                self.scope = nil
+                return
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.text = try container.decode(String.self, forKey: .text)
+            self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case text, scope
+        }
+    }
 
     public struct TriplePayload: Codable, Sendable {
         public let subject: String
         public let predicate: String
         public let object: String
+        public let scope: String?
 
-        public init(subject: String, predicate: String, object: String) {
+        public init(subject: String, predicate: String, object: String, scope: String? = nil) {
             self.subject = subject
             self.predicate = predicate
             self.object = object
+            self.scope = scope
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.subject = try container.decode(String.self, forKey: .subject)
+            self.predicate = try container.decode(String.self, forKey: .predicate)
+            self.object = try container.decode(String.self, forKey: .object)
+            self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case subject, predicate, object, scope
         }
     }
 
-    public init(facts: [String] = [], triples: [TriplePayload] = [], importance: Int? = 5) {
+    public let facts: [FactItem]
+    public let triples: [TriplePayload]
+    public let importance: Int?
+
+    public init(facts: [FactItem] = [], triples: [TriplePayload] = [], importance: Int? = 5) {
         self.facts = facts
         self.triples = triples
         self.importance = importance

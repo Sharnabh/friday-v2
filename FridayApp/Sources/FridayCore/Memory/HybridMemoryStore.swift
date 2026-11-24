@@ -149,25 +149,45 @@ public final class HybridMemoryStore: @unchecked Sendable {
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !clean.isEmpty else { return [] }
 
-        var stmt: OpaquePointer?
+        // Tokenize query words, filtering common stop words
+        let rawTokens = clean.split { !$0.isLetter && !$0.isNumber }.map { String($0) }
+        let stopWords: Set<String> = ["what", "is", "a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "of", "with", "do", "you", "tell", "me"]
+        var tokens = rawTokens.filter { !stopWords.contains($0) && $0.count >= 2 }
+        if tokens.isEmpty {
+            tokens = rawTokens
+        }
+        guard !tokens.isEmpty else { return [] }
+
+        let clauses = tokens.map { _ in "(lower(subject) LIKE ? OR lower(predicate) LIKE ? OR lower(object) LIKE ?)" }
+        let whereClause = clauses.joined(separator: " OR ")
+
         let sql = """
         SELECT id, scope, subject, predicate, object, confidence, created_at
         FROM graph_triples
         WHERE scope IN ('shared', ?)
-          AND (lower(subject) LIKE ? OR lower(predicate) LIKE ? OR lower(object) LIKE ?)
+          AND (\(whereClause))
         ORDER BY id DESC LIMIT ?
         """
+
+        var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
             throw failure()
         }
         defer { sqlite3_finalize(stmt) }
 
-        let wildcard = "%\(clean)%"
-        sqlite3_bind_text(stmt, 1, scope, -1, Self.transient)
-        sqlite3_bind_text(stmt, 2, wildcard, -1, Self.transient)
-        sqlite3_bind_text(stmt, 3, wildcard, -1, Self.transient)
-        sqlite3_bind_text(stmt, 4, wildcard, -1, Self.transient)
-        sqlite3_bind_int(stmt, 5, Int32(limit))
+        var bindIdx: Int32 = 1
+        sqlite3_bind_text(stmt, bindIdx, scope, -1, Self.transient)
+        bindIdx += 1
+
+        for token in tokens {
+            let wildcard = "%\(token)%"
+            sqlite3_bind_text(stmt, bindIdx, wildcard, -1, Self.transient)
+            sqlite3_bind_text(stmt, bindIdx + 1, wildcard, -1, Self.transient)
+            sqlite3_bind_text(stmt, bindIdx + 2, wildcard, -1, Self.transient)
+            bindIdx += 3
+        }
+
+        sqlite3_bind_int(stmt, bindIdx, Int32(limit))
 
         var results = [GraphTriple]()
         while sqlite3_step(stmt) == SQLITE_ROW {

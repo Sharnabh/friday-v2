@@ -34,6 +34,35 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         }
     }
 
+    /// Strips Hermes telemetry, internal chain of thought, and session summaries
+    public static func cleanHermesOutput(_ raw: String) -> String {
+        var text = raw
+
+        // If "▼ Hermes" exists, the actual response begins after that marker
+        if let range = text.range(of: "▼ Hermes\n") {
+            text = String(text[range.upperBound...])
+        } else if let range = text.range(of: "▼ Hermes") {
+            text = String(text[range.upperBound...])
+        }
+
+        // If "Resume this session with:" exists, strip it and everything after
+        if let range = text.range(of: "Resume this session with:") {
+            text = String(text[..<range.lowerBound])
+        }
+
+        let lines = text.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("Session:") &&
+                   !trimmed.hasPrefix("Duration:") &&
+                   !trimmed.hasPrefix("Messages:") &&
+                   !trimmed.hasPrefix("session_id:") &&
+                   !trimmed.hasPrefix("Thought for ") &&
+                   !trimmed.hasPrefix("∴ Thought")
+        }
+
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Executes a clean, direct prompt without artificial wrapper templates
     public func executeRawChat(
         prompt: String,
@@ -67,7 +96,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         }
 
         process.waitUntilExit()
-        return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.cleanHermesOutput(accumulated)
     }
 
     /// Executes inference with streaming callback chunks
@@ -91,9 +120,12 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         }
 
         let fullPrompt = """
-        Your name is \(botName). \(botInstructions)
-        \(contextMemory.isEmpty ? "" : "User-approved context memories:\n" + contextMemory + "\n\n")
-        User request:
+        You are \(botName), an AI assistant. \(botInstructions)
+        \(contextMemory.isEmpty ? "" : "User Profile & Memory Context:\n" + contextMemory + "\n\n")
+        Always remember: You are \(botName) (the assistant). The person speaking to you is the human User.
+        Respond directly, helpfully, and concisely. Never output internal thought processes, meta-descriptions, or reasoning preambles.
+
+        User:
         \(prompt)
         """
         args += ["-q", fullPrompt]
@@ -132,10 +164,11 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
             }
         }
 
-        if process.terminationStatus != 0 && accumulated.isEmpty {
+        let cleaned = Self.cleanHermesOutput(accumulated)
+        if process.terminationStatus != 0 && cleaned.isEmpty {
             throw FridayError.message("Inference failed: " + errText)
         }
 
-        return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned
     }
 }

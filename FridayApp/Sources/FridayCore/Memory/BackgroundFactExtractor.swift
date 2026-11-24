@@ -61,6 +61,7 @@ public final class BackgroundFactExtractor: Sendable {
     public func processTurn(
         userPrompt: String,
         assistantResponse: String,
+        botName: String,
         scope: String,
         store: HybridMemoryStore,
         provider: String,
@@ -68,18 +69,24 @@ public final class BackgroundFactExtractor: Sendable {
     ) {
         Task.detached(priority: .utility) {
             let prompt = """
-            Extract any durable user preferences, facts, or entities mentioned in this turn.
-            Ignore casual greetings and small talk.
+            Extract any durable facts, personal attributes, or preferences about the USER mentioned in this turn.
+            CRITICAL:
+            - Distinguish between the human USER and the AI assistant (\(botName)).
+            - Never confuse the AI assistant's name (\(botName)) or system identity with the human user.
+            - If the user states their own name, attribute it to the User.
+            - General user identity facts (like the user's name, email, job, location) should be marked with "scope": "shared".
+            - Bot-specific discussion notes should be marked with "scope": "\(scope)".
+
             Output JSON only in this format:
             {
-              "facts": ["concise atomic fact sentence"],
-              "triples": [{"subject":"EntityA", "predicate":"prefers", "object":"EntityB"}],
-              "importance": 7
+              "facts": [{"text": "User's name is Sharnabh", "scope": "shared"}],
+              "triples": [{"subject":"User", "predicate":"name", "object":"Sharnabh", "scope":"shared"}],
+              "importance": 8
             }
             If nothing durable was mentioned, return {"facts":[], "triples":[]}.
 
-            User said: "\(userPrompt)"
-            Assistant replied: "\(assistantResponse.prefix(400))"
+            Human User said: "\(userPrompt)"
+            AI Assistant (\(botName)) replied: "\(assistantResponse.prefix(400))"
             """
 
             do {
@@ -99,14 +106,30 @@ public final class BackgroundFactExtractor: Sendable {
 
                 // 1. Save atomic facts with extracted importance
                 let imp = payload.importance ?? 5
-                for fact in payload.facts where !fact.trimmingCharacters(in: .whitespaces).isEmpty {
-                    try? store.save(fact, scope: scope, source: "Autonomous Extractor", importance: imp, original: nil)
+                for item in payload.facts {
+                    let factText = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !factText.isEmpty else { continue }
+
+                    // Determine scope: if item has explicit scope, use it; otherwise check if it's general user identity
+                    let lower = factText.lowercased()
+                    let isUserIdentity = lower.contains("user's name") || lower.contains("user is named") ||
+                                         lower.contains("user's email") || lower.contains("user's job") ||
+                                         lower.contains("user lives in") || lower.contains("user's role") ||
+                                         lower.contains("user is a") || lower.hasPrefix("user prefers")
+
+                    let factScope = item.scope ?? (isUserIdentity ? "shared" : scope)
+                    try? store.save(factText, scope: factScope, source: "Autonomous Extractor", importance: imp, original: nil)
+                    WorkingMemoryCache.shared.invalidate(scope: factScope)
                 }
 
                 // 2. Save graph relation triples (GraphRAG)
                 for triple in payload.triples {
+                    let subLower = triple.subject.lowercased()
+                    let isUserTriple = subLower == "user" || subLower == "human"
+                    let tripleScope = triple.scope ?? (isUserTriple ? "shared" : scope)
+
                     let graphItem = GraphTriple(
-                        scope: scope,
+                        scope: tripleScope,
                         subject: triple.subject,
                         predicate: triple.predicate,
                         object: triple.object,
@@ -117,6 +140,7 @@ public final class BackgroundFactExtractor: Sendable {
 
                 // Invalidate working memory cache on new state
                 WorkingMemoryCache.shared.invalidate(scope: scope)
+                WorkingMemoryCache.shared.invalidate(scope: "shared")
 
             } catch {
                 // Background extraction fails silently without interrupting user

@@ -95,6 +95,23 @@ struct TestRunner {
             assert(cached?.count == results.count, "Cache should retrieve stored entries immediately")
             print("   LRU Cache retrieved \(cached?.count ?? 0) items in <0.01 ms")
 
+            // 6. Test Cross-Bot Shared Identity Retrieval
+            print("\n[Step 6] Testing Cross-Bot Shared Identity Retrieval...")
+            try store.save("User's name is Sharnabh", scope: "shared", source: "User", importance: 10, original: nil)
+            try store.saveTriple(GraphTriple(scope: "shared", subject: "User", predicate: "has_name", object: "Sharnabh", confidence: 1.0))
+
+            let kiaraScope = "private:bot-kiara-uuid"
+            let kiaraTriples = try store.queryTriples(query: "What is my name?", scope: kiaraScope)
+            print("   Kiara found triples count: \(kiaraTriples.count)")
+            for t in kiaraTriples {
+                print("   Kiara retrieved: \(t.summary) from scope: \(t.scope)")
+            }
+            assert(!kiaraTriples.isEmpty, "Kiara must find user name in shared scope")
+
+            let kiaraMemories = try store.search("user name", scope: kiaraScope, limit: 1)
+            assert(!kiaraMemories.isEmpty && kiaraMemories[0].body.contains("Sharnabh"), "Kiara must find user's name from shared memory")
+            print("   Kiara retrieved memory: '\(kiaraMemories[0].body)'")
+
             print("\n==================================================")
             print("  ALL MEMORY UPGRADES VERIFIED AND PASSED (100%)  ")
             print("==================================================")
