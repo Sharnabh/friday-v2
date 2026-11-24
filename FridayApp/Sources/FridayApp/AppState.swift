@@ -601,12 +601,13 @@ public final class AppState: ObservableObject {
                             botInstructions: single.instructions,
                             onChunk: { _ in }
                         )
-                        turns.append(single.name + "\n" + reply)
+                        let cleanReply = AssistantService.cleanBotReply(reply, botName: single.name)
+                        turns.append(single.name + "\n" + cleanReply)
                         defaults.set(turns, forKey: key)
                         self.currentTranscript = turns
                         self.statusMessage = "Ready"
                         self.isBusy = false
-                        AssistantService.shared.speak(reply)
+                        AssistantService.shared.speak(cleanReply)
                     } else {
                         statusMessage = "Orchestrating agent collaboration…"
                         let respondingNames = try await AssistantService.shared.resolveRespondingBots(
@@ -622,22 +623,36 @@ public final class AppState: ObservableObject {
 
                             statusMessage = "\(target.name) is replying…"
                             let contextTurns = turns.suffix(16).joined(separator: "\n\n")
+                            let otherBots = candidates.filter { $0.name.caseInsensitiveCompare(target.name) != .orderedSame }.map { $0.name }
+                            let otherBotsNotice = otherBots.isEmpty ? "" : "Other bots in this conversation: \(otherBots.joined(separator: ", "))."
+
                             let groupPrompt = """
                             You are \(target.name), an AI assistant. \(target.instructions)
                             \(context.isEmpty ? "" : "Durable User Profile & Memory Context:\n" + context + "\n\n")
-                            You are participating in this conversation. Respond naturally, directly, and in your own persona.
-                            If a task was delegated to you or another bot spoke, address it seamlessly.
-                            Never repeat meta-descriptions or reasoning preambles.
+                            \(otherBotsNotice)
+
+                            STRICT MULTI-AGENT COLLABORATION PROTOCOL:
+                            1. You are speaking EXCLUSIVELY as \(target.name).
+                            2. NEVER generate responses, simulate dialogue, or write on behalf of any other bot (\(otherBots.joined(separator: ", "))). Each bot is an independent agent and is called in its own separate turn.
+                            3. If the user addressed multiple bots in their message, respond ONLY to the part intended for \(target.name).
+                            4. Respond directly in your own persona. Do not prefix your message with your name (do NOT write "\(target.name):" or "**\(target.name)**:").
+                            5. Do NOT output internal reasoning, thought commentary, or preambles (never write "Let me respond directly...").
 
                             Conversation transcript so far:
                             \(contextTurns)
                             """
 
-                            let memberReply = try await AssistantService.shared.executeRawChat(
+                            let rawMemberReply = try await AssistantService.shared.executeRawChat(
                                 prompt: groupPrompt,
                                 provider: target.provider,
                                 model: target.model
                             )
+                            let memberReply = AssistantService.cleanBotReply(
+                                rawMemberReply,
+                                botName: target.name,
+                                otherBotNames: candidates.map(\.name)
+                            )
+                            guard !memberReply.isEmpty else { continue }
                             turns.append(target.name + "\n" + memberReply)
                             defaults.set(turns, forKey: key)
                             self.currentTranscript = turns

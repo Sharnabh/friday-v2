@@ -954,21 +954,47 @@ struct MarkdownInlineText: View {
     @Environment(\.colorScheme) var colorScheme
 
     var attributed: AttributedString {
-        if var attr = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-            for run in attr.runs {
-                if run.inlinePresentationIntent?.contains(.code) == true {
-                    attr[run.range].backgroundColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+        var attr = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+
+        // Set base text color
+        let baseFg = isUser ? WhatsAppTheme.userText(for: colorScheme) : WhatsAppTheme.botText(for: colorScheme)
+        attr.foregroundColor = baseFg
+
+        // 1. Highlight inline code
+        for run in attr.runs {
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                attr[run.range].backgroundColor = colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+            }
+        }
+
+        // 2. Highlight @mentions in both user prompts and bot responses
+        let raw = String(attr.characters)
+        if let regex = try? NSRegularExpression(pattern: "@[a-zA-Z0-9_]+") {
+            let matches = regex.matches(in: raw, range: NSRange(location: 0, length: (raw as NSString).length))
+            for match in matches {
+                if let strRange = Range(match.range, in: raw),
+                   let attrRange = Range(strRange, in: attr) {
+                    let mentionColor: Color = isUser
+                        ? (colorScheme == .dark ? Color(red: 0.35, green: 0.85, blue: 1.0) : Color(red: 0.05, green: 0.45, blue: 0.3))
+                        : (colorScheme == .dark ? Color(red: 0.35, green: 0.85, blue: 1.0) : Color(red: 0.02, green: 0.52, blue: 0.88))
+
+                    let mentionBg: Color = isUser
+                        ? (colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08))
+                        : (colorScheme == .dark ? Color.blue.opacity(0.2) : Color.blue.opacity(0.1))
+
+                    attr[attrRange].foregroundColor = mentionColor
+                    attr[attrRange].backgroundColor = mentionBg
+                    attr[attrRange].inlinePresentationIntent = .stronglyEmphasized
                 }
             }
-            return attr
         }
-        return AttributedString(text)
+
+        return attr
     }
 
     var body: some View {
         Text(attributed)
             .font(font)
-            .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme) : WhatsAppTheme.botText(for: colorScheme))
             .textSelection(.enabled)
     }
 }
@@ -1153,6 +1179,7 @@ struct MarkdownMessageView: View {
 struct ChatBubble: View {
     let text: String
     @Environment(\.colorScheme) var colorScheme
+    @EnvironmentObject var state: AppState
 
     var isUser: Bool {
         text.hasPrefix("You\n")
@@ -1165,7 +1192,11 @@ struct ChatBubble: View {
 
     var bodyText: String {
         let lines = text.components(separatedBy: "\n")
-        return lines.dropFirst().joined(separator: "\n")
+        let raw = lines.dropFirst().joined(separator: "\n")
+        if !isUser {
+            return AssistantService.cleanBotReply(raw, botName: senderName, otherBotNames: state.mentionableBots.map(\.name))
+        }
+        return raw
     }
 
     var body: some View {

@@ -63,6 +63,70 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Strips leading reasoning preambles, self-name labels, and truncates simulated dialogue for other bots
+    public static func cleanBotReply(_ raw: String, botName: String, otherBotNames: [String] = []) -> String {
+        var text = cleanHermesOutput(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. Strip leading reasoning preambles (e.g. "Let me respond directly...")
+        let reasoningPatterns = [
+            "^Let me respond directly[^\\n]*[\\.:]?\\s*",
+            "^I will respond directly[^\\n]*[\\.:]?\\s*",
+            "^Here is what I would say[^\\n]*[\\.:]?\\s*",
+            "^Let me address this[^\\n]*[\\.:]?\\s*",
+            "^Here is my response[^\\n]*[\\.:]?\\s*",
+            "^Sure! Let me answer[^\\n]*[\\.:]?\\s*",
+            "^As an AI assistant[^\\n]*[\\.:]?\\s*"
+        ]
+        for pat in reasoningPatterns {
+            if let rx = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) {
+                let range = NSRange(location: 0, length: (text as NSString).length)
+                text = rx.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // 2. Strip leading self bot name prefix (e.g. "Kiara:\n" or "**Kiara**:\n" or "Kiara - ")
+        let selfEscaped = NSRegularExpression.escapedPattern(for: botName)
+        let selfPrefixPattern = "^(\\*\\*|\\[|@)?\(selfEscaped)(\\*\\*|\\])?\\s*[:\\-]\\s*"
+        if let rx = try? NSRegularExpression(pattern: selfPrefixPattern, options: [.caseInsensitive]) {
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            text = rx.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Also handle standalone bot name on its own first line
+        let lines = text.components(separatedBy: "\n")
+        if let first = lines.first, first.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(botName) == .orderedSame {
+            text = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 3. Truncate if the bot simulated a subsequent bot turn in script format
+        var earliestCutIndex: String.Index? = nil
+        for other in otherBotNames {
+            let trimmedOther = other.trimmingCharacters(in: .whitespaces)
+            guard !trimmedOther.isEmpty, trimmedOther.caseInsensitiveCompare(botName) != .orderedSame else { continue }
+
+            let otherEscaped = NSRegularExpression.escapedPattern(for: trimmedOther)
+            // Matches newline followed by another bot name as a dialogue header (e.g. "\nJarvis:" or "\n**Jarvis**:")
+            let pattern = "\\n+(\\*\\*|\\[|@)?\(otherEscaped)(\\*\\*|\\])?\\s*[:\\-]\\s*"
+            if let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let ns = text as NSString
+                if let match = rx.firstMatch(in: text, options: [], range: NSRange(location: 0, length: ns.length)),
+                   let matchRange = Range(match.range, in: text) {
+                    if earliestCutIndex == nil || matchRange.lowerBound < earliestCutIndex! {
+                        earliestCutIndex = matchRange.lowerBound
+                    }
+                }
+            }
+        }
+
+        if let cut = earliestCutIndex {
+            text = String(text[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Executes a clean, direct prompt without artificial wrapper templates
     public func executeRawChat(
         prompt: String,
@@ -226,7 +290,7 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
             }
         }
 
-        let cleaned = Self.cleanHermesOutput(accumulated)
+        let cleaned = Self.cleanBotReply(accumulated, botName: botName)
         if process.terminationStatus != 0 && cleaned.isEmpty {
             throw FridayError.message("Inference failed: " + errText)
         }
