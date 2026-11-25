@@ -78,11 +78,10 @@ public final class MailCalendarService {
         return result
     }
 
-    public static func upcomingCalendarConflicts() throws -> [String: Any] {
-        let store = EKEventStore(), ready = DispatchSemaphore(value: 0)
+    public static func upcomingCalendarConflicts() async throws -> [String: Any] {
+        let store = EKEventStore()
         if EKEventStore.authorizationStatus(for: .event) != .fullAccess {
-            store.requestFullAccessToEvents { _, _ in ready.signal() }
-            ready.wait()
+            _ = try await store.requestFullAccessToEvents()
         }
         guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
             throw FridayError.message("Allow FRIDAY full Calendar access in Privacy & Security to check availability.")

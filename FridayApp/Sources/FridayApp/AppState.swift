@@ -10,7 +10,15 @@ public final class AppState: ObservableObject {
     
     // Voice & Wake Word
     @Published public var isVoiceActive: Bool = false
-    @Published public var isWakeEnabled: Bool = false
+    @Published public var isWakeEnabled: Bool = false {
+        didSet {
+            guard oldValue != isWakeEnabled else {return}
+            if isWakeEnabled {
+                if VoiceService.shared.isActive {VoiceService.shared.stopCapture()}
+                armWakeIfReady()
+            } else {VoiceService.shared.stopCapture(); isVoiceActive = false}
+        }
+    }
     @Published public var audioLevel: Double = 0.0
     @Published public var availableMics: [String] = []
     @Published public var selectedMic: String = ""
@@ -25,8 +33,9 @@ public final class AppState: ObservableObject {
     }
     @Published public var bots: [BotProfile] = []
     @Published public var groups: [BotGroup] = []
-    @Published public var provider: String = ""
-    @Published public var model: String = ""
+    @Published public var provider: String = "" { didSet { if !loadingModels { defaults.set(provider,forKey:activeBotScope+"chatProvider") } } }
+    @Published public var model: String = "" { didSet { if !loadingModels { defaults.set(model,forKey:activeBotScope+"chatModel") } } }
+    private var loadingModels = false
     
     // Sessions & Conversations
     @Published public var currentSessionId: String = ""
@@ -61,11 +70,13 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
-    private let defaults = UserDefaults.standard
+    private let defaults:UserDefaults
     private var reminderTimer: Timer?
 
-    public init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    public init(defaults:UserDefaults = .standard,
+                appSupport:URL = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0],
+                startServices:Bool = true) {
+        self.defaults=defaults
         let dbUrl = appSupport.appendingPathComponent("Friday/Memory.sqlite")
         let reminderFile = appSupport.appendingPathComponent("FRIDAY/reminders.json")
         let activityFolder = appSupport.appendingPathComponent("FRIDAY/activity")
@@ -90,8 +101,7 @@ public final class AppState: ObservableObject {
         loadBotsAndGroups()
         loadTranscripts()
         loadReminders()
-        setupVoicePipeline()
-        startReminderPoller()
+        if startServices {setupVoicePipeline();startReminderPoller()}
     }
 
     public var activeBotScope: String {
@@ -118,39 +128,41 @@ public final class AppState: ObservableObject {
         self.availableMics = voice.listMicrophones()
         self.selectedMic = defaults.string(forKey: "fridayMic") ?? availableMics.first ?? ""
 
-        voice.onLevelUpdate = { [weak self] level in
-            Task { @MainActor in self?.audioLevel = level }
-        }
+        voice.onLevelUpdate = { [weak self] level in self?.audioLevel = level }
         voice.onStateUpdate = { [weak self] state in
-            Task { @MainActor in self?.statusMessage = state }
+            if self?.isWakeEnabled == true && state == "Listening" {AssistantService.shared.stopSpeaking()}
+            self?.statusMessage = state
         }
         voice.onTranscriptionComplete = { [weak self] text in
-            Task { @MainActor in
-                self?.inputMessage = text
-                self?.statusMessage = "Review transcription, then Send"
-                if self?.isWakeEnabled == true {
-                    self?.sendMessage()
-                }
-            }
+            guard let self else {return}
+            self.isVoiceActive = false
+            self.inputMessage = text
+            self.statusMessage = "Review transcription, then Send"
+            if self.isWakeEnabled {self.sendMessage()}
         }
         voice.onError = { [weak self] error in
-            Task { @MainActor in self?.statusMessage = error }
+            self?.isVoiceActive = false
+            self?.isWakeEnabled = false
+            self?.statusMessage = error
         }
     }
 
+    private func armWakeIfReady() {
+        guard isWakeEnabled, !isBusy, !VoiceService.shared.isActive else {return}
+        isVoiceActive = true
+        VoiceService.shared.startCapture(handsFree:true,micDeviceName:selectedMic)
+    }
+
     public func toggleVoiceRecording() {
-        if isVoiceActive {
-            VoiceService.shared.stopCapture()
-            isVoiceActive = false
-        } else {
-            VoiceService.shared.startCapture(handsFree: isWakeEnabled, micDeviceName: selectedMic)
-            isVoiceActive = true
-        }
+        if isWakeEnabled {isWakeEnabled = false; return}
+        if VoiceService.shared.isActive {VoiceService.shared.finishCapture();return}
+        isVoiceActive = true
+        VoiceService.shared.startCapture(handsFree:false,micDeviceName:selectedMic)
     }
 
     private func startReminderPoller() {
         reminderTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkDueReminders() }
+            Task { @MainActor in self?.checkDueReminders(); self?.armWakeIfReady() }
         }
     }
 
@@ -176,8 +188,8 @@ public final class AppState: ObservableObject {
     }
 
     public func onBotChanged() {
-        defaults.set(provider, forKey: activeBotScope + "chatProvider")
-        defaults.set(model, forKey: activeBotScope + "chatModel")
+        loadingModels = true
+        defer { loadingModels = false }
         defaults.set(activeBotId, forKey: "activeBot")
         self.provider = defaults.string(forKey: activeBotScope + "chatProvider") ?? ""
         self.model = defaults.string(forKey: activeBotScope + "chatModel") ?? ""
@@ -481,19 +493,51 @@ public final class AppState: ObservableObject {
         return id
     }
 
-    public func loadMemories(query: String = "") {
-        guard let store = memoryStore else { return }
-        let effScope: String
-        switch selectedMemoryScope {
-        case "all": effScope = "all"
-        case "shared": effScope = "shared"
-        default: effScope = memoryScope
+    @Published var pendingMailSubject:String?
+    @Published var controlTask:Task<String,Error>?
+    private var guests=[String:GuestController]()
+    func guestForBot()->GuestController {
+        if let existing=guests[activeBotId] {return existing}
+        let new=GuestController();guests[activeBotId]=new;return new
+    }
+    private var memorySearchTask: Task<Void,Never>?
+    private var currentMemoryQuery = ""
+    public func loadMemories(query: String? = nil) {
+        if let query { currentMemoryQuery = query }
+        memorySearchTask?.cancel()
+        guard let store = memoryStore else {return}
+        let q = currentMemoryQuery
+        let scope = ["all","shared"].contains(selectedMemoryScope) ? selectedMemoryScope : memoryScope
+        memorySearchTask = Task {
+            do {
+                try await Task.sleep(for:.milliseconds(180))
+                let result = try await Task.detached(priority:.userInitiated) {
+                    let entries = try store.search(q,scope:scope,limit:100)
+                    let triples = q.isEmpty ? try store.listTriples(scope:scope,limit:100) : try store.queryTriples(query:q,scope:scope,limit:100)
+                    return (entries,triples)
+                }.value
+                try Task.checkCancellation()
+                memories=result.0;graphTriples=result.1
+            } catch { if !Task.isCancelled {statusMessage=error.localizedDescription} }
         }
-        do {
-            self.memories = try store.search(query, scope: effScope, limit: 100)
-            self.graphTriples = try store.listTriples(scope: effScope, limit: 100)
-        } catch {
-            self.statusMessage = "Search error: \(error.localizedDescription)"
+    }
+
+    func reviseMemory(_ entry:MemoryEntry,body:String,scope:String) throws {
+        guard let memoryStore else {throw FridayError.message("Memory store unavailable")}
+        try memoryStore.save(body,scope:scope,source:entry.source,importance:entry.importance,original:entry)
+        WorkingMemoryCache.shared.clear()
+        loadMemories()
+    }
+
+    func showOrigin(_ source:String) {
+        guard let origin=MemoryOrigin.decode(source),
+              let turns=defaults.stringArray(forKey:(origin.bot.isEmpty ? "" : "bot."+origin.bot+".")+"transcript."+origin.session),
+              turns.indices.contains(origin.turn) else {statusMessage="Original turn unavailable";return}
+        let panel=NSAlert()
+        panel.messageText="Original chat turn";panel.informativeText=turns[origin.turn]
+        panel.addButton(withTitle:"Open conversation");panel.addButton(withTitle:"Close")
+        if panel.runModal() == .alertFirstButtonReturn {
+            selectBot(origin.bot);selectSession(origin.session);selectedTab=0
         }
     }
 
@@ -505,14 +549,7 @@ public final class AppState: ObservableObject {
             loadMemories()
             self.statusMessage = "Memory deleted"
         } catch {
-            do {
-                try store.remove(id: entry.id)
-                WorkingMemoryCache.shared.clear()
-                loadMemories()
-                self.statusMessage = "Memory deleted"
-            } catch {
-                self.statusMessage = "Delete error: \(error.localizedDescription)"
-            }
+            self.statusMessage = "Delete error: \(error.localizedDescription)"
         }
     }
 
@@ -599,12 +636,15 @@ public final class AppState: ObservableObject {
         let text = inputMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isBusy else { return }
 
+        if isWakeEnabled {VoiceService.shared.stopCapture();isVoiceActive = false}
         inputMessage = ""
         isBusy = true
         statusMessage = "Understanding request…"
 
+        let originatingScope = memoryScope
         let key = activeBotScope + "transcript." + sessionID
         var turns = defaults.stringArray(forKey: key) ?? []
+        let origin = MemoryOrigin(bot:activeBotId,session:sessionID,turn:turns.count).encoded
         turns.append("You\n" + text)
         defaults.set(turns, forKey: key)
         self.currentTranscript = turns
@@ -615,51 +655,28 @@ public final class AppState: ObservableObject {
                 let history = turns.suffix(3).map { String($0.prefix(2000)) }
                 let previous = defaults.string(forKey: cacheKey)
 
-                // 1. Intelligent Route Decision
-                let decision = try ScreenInferenceRouter.routeQuestion(
-                    text,
-                    history: history,
-                    hasPreviousCapture: previous != nil,
-                    provider: provider,
-                    model: model
-                )
-
                 let botName = currentBotName
                 let botInstr = currentBotInstructions
 
-                // Natural Language Memory Forget Handler (ChatGPT / Gemini style)
-                let lowerText = text.lowercased()
-                let isForgetRequest = lowerText.hasPrefix("forget ") || lowerText.contains("forget that i ") ||
-                                      lowerText.contains("forget that my ") || lowerText.contains("forget my ") ||
-                                      lowerText.contains("forget about ") || lowerText.contains("delete memory about ") ||
-                                      lowerText.contains("remove from memory ")
-
-                if isForgetRequest, let store = self.memoryStore {
-                    var targetTopic = text
-                    let stripPrefixes = ["forget that i am a ", "forget that i am ", "forget that i ", "forget that my ",
-                                         "forget my ", "forget about ", "forget ", "delete memory about ", "remove from memory "]
-                    for p in stripPrefixes {
-                        if lowerText.contains(p) {
-                            if let r = lowerText.range(of: p) {
-                                targetTopic = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                                break
-                            }
-                        }
+                if let topic = ForgetRequest.topic(in:text), let store = self.memoryStore {
+                    let local = try store.previewForget(topic:topic,scope:originatingScope)
+                    let shared = try store.previewForget(topic:topic,scope:"shared")
+                    var replyText = "No matching memories in this conversation or shared memory."
+                    if !local.isEmpty || !shared.isEmpty {
+                        let panel = NSAlert()
+                        panel.messageText = "Review memories to forget"
+                        let scope = local.isEmpty ? "shared" : originatingScope
+                        let matches = local.isEmpty ? shared : local
+                        panel.informativeText = "Audience: " + scope + "\n\n" + matches.map(\.description).joined(separator:"\n")
+                        panel.addButton(withTitle:"Cancel")
+                        panel.addButton(withTitle:"Forget these memories")
+                        if panel.runModal() == .alertSecondButtonReturn {
+                            try store.forget(topic:topic,scope:scope,approved:matches)
+                            WorkingMemoryCache.shared.clear()
+                            loadMemories()
+                            replyText = "Removed the reviewed memories."
+                        } else {replyText = "Kept the memories."}
                     }
-                    if targetTopic.isEmpty { targetTopic = text }
-
-                    let deleted = (try? store.deleteMatching(topic: targetTopic, scope: "all")) ?? []
-                    WorkingMemoryCache.shared.clear()
-                    loadMemories()
-
-                    let replyText: String
-                    if !deleted.isEmpty {
-                        replyText = "I've updated my memory and forgotten that for you: “\(deleted.first ?? targetTopic)”"
-                        notifyMemoryUpdated(text: "Forgotten: \(targetTopic)")
-                    } else {
-                        replyText = "I checked my memory and couldn't find any stored facts matching “\(targetTopic)”."
-                    }
-
                     turns.append(botName + "\n" + replyText)
                     defaults.set(turns, forKey: key)
                     self.currentTranscript = turns
@@ -668,6 +685,13 @@ public final class AppState: ObservableObject {
                     AssistantService.shared.speak(replyText)
                     return
                 }
+
+                // 1. Intelligent Route Decision
+                let routeProvider = provider, routeModel = model
+                let decision = try await Task.detached {
+                    try ScreenInferenceRouter.routeQuestion(text, history: history, hasPreviousCapture: previous != nil,
+                                                            provider: routeProvider, model: routeModel)
+                }.value
 
                 // 2. Action or Chat Dispatch
                 var reply = ""
@@ -679,50 +703,110 @@ public final class AppState: ObservableObject {
                         "history": history
                     ]
                     let proposal = try ScreenInferenceRouter.infer(proposalReq, provider: provider, model: model)
-                    saveMemory(body: proposal, isShared: true)
-                    reply = "I've remembered that for you: “\(proposal)”"
+                    let panel = NSAlert()
+                    panel.messageText = "Save this memory?"
+                    panel.informativeText = proposal
+                    panel.addButton(withTitle:isGroupSelected ? "Save for this group" : "Save for this bot")
+                    panel.addButton(withTitle:"Cancel")
+                    panel.addButton(withTitle:"Share with every bot")
+                    let choice = panel.runModal()
+                    if choice == .alertSecondButtonReturn {reply = "Memory was not saved."}
+                    else {
+                        guard let store = memoryStore else {throw FridayError.message("Memory store unavailable.")}
+                        let audience = choice == .alertThirdButtonReturn ? "shared" : originatingScope
+                        try store.save(proposal,scope:audience,source:origin,original:nil)
+                        WorkingMemoryCache.shared.clear()
+                        loadMemories()
+                        notifyMemoryUpdated(text:proposal)
+                        reply = "Memory saved to " + audience + "."
+                    }
 
                 case .control:
                     statusMessage = "Operating Mac app…"
-                    let planReq: [String: Any] = ["operation": "control", "question": text]
-                    let planJson = try ScreenInferenceRouter.infer(planReq, provider: provider, model: model)
-                    let activeProvider = provider
-                    let activeModel = model
-                    reply = try MacAutomationDriver.performMacPlan(planJson) { visible in
-                        var rev = planReq
-                        rev["visibleControls"] = visible
-                        rev["initialPlan"] = planJson
-                        let revPlan = try ScreenInferenceRouter.infer(rev, provider: activeProvider, model: activeModel)
-                        return try JSONDecoder().decode(MacPlan.self, from: Data(revPlan.utf8))
+                    let selectedProvider=provider, selectedModel=model
+                    let worker=Task.detached(priority:.userInitiated) {
+                        let request:[String:Any]=["operation":"control","question":text]
+                        let initial=try ScreenInferenceRouter.infer(request,provider:selectedProvider,model:selectedModel)
+                        try Task.checkCancellation()
+                        return try MacAutomationDriver.performMacPlan(initial,locate:{ image,description in
+                            let raw=try ScreenInferenceRouter.infer(["operation":"locate","image":image.path,"question":description],provider:selectedProvider,model:selectedModel)
+                            return try JSONDecoder().decode([String:Double].self,from:Data(raw.utf8))
+                        }) { labels,completed,app in
+                            var refined=request;refined["initialPlan"]=initial;refined["visibleControls"]=labels;refined["alreadyCompleted"]=completed;refined["currentApp"]=app
+                            let raw=try ScreenInferenceRouter.infer(refined,provider:selectedProvider,model:selectedModel)
+                            return try JSONDecoder().decode(MacPlan.self,from:Data(raw.utf8))
+                        }
                     }
+                    controlTask=worker
+                    defer {controlTask=nil}
+                    reply=try await worker.value
 
+                case .visual:
+                    let url=try DesktopTools.imageOfActiveWindow()
+                    defer {try? FileManager.default.removeItem(at:url)}
+                    reply=try ScreenInferenceRouter.infer(["operation":"visual","image":url.path,"question":text],provider:provider,model:model)
+                    defaults.set(reply,forKey:cacheKey)
                 case .active:
                     statusMessage = "Reading active window…"
                     let capture = try MacAutomationDriver.readActiveWindow()
                     defaults.set(String(capture.prefix(12000)), forKey: cacheKey)
-                    let answerReq: [String: Any] = ["operation": "answer", "capture": String(capture.prefix(12000)), "question": text]
-                    reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+                    if decision.mode == .verbatim {reply=capture} else {
+                        let answerReq: [String: Any] = ["operation": "answer", "capture": String(capture.prefix(12000)), "question": text]
+                        reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+                    }
 
                 case .editor:
                     statusMessage = "Reading TextEdit document…"
                     let capture = try MacAutomationDriver.readEditor(text)
-                    reply = "TextEdit contents:\n" + capture
+                    defaults.set(capture, forKey: cacheKey)
+                    reply = decision.mode == .verbatim ? capture : try ScreenInferenceRouter.infer(
+                        ["operation": "answer", "capture": capture, "question": text], provider: provider, model: model
+                    )
+
+                case .messageDraft:
+                    let raw = try ScreenInferenceRouter.infer(["operation": "messageBody", "question": text, "history": history],
+                                                              provider: provider, model: model)
+                    let draft = try JSONDecoder().decode([String: String].self, from: Data(raw.utf8))
+                    guard let body = draft["body"], !body.isEmpty,
+                          let service = NSSharingService(named: .composeMessage) else {
+                        throw FridayError.message("Could not prepare a Messages draft.")
+                    }
+                    if let recipient = draft["recipient"], !recipient.isEmpty { service.recipients = [recipient] }
+                    service.perform(withItems: [body])
+                    reply = "Opened a draft for review in Messages."
 
                 case .mailReply, .calendarReply:
                     statusMessage = "Drafting Apple Mail reply…"
-                    let helper = Bundle.main.path(forResource: "mail_reply", ofType: "js")
-                        ?? "/Users/user/Documents/Codex/2026-11-23/i-w/outputs/Friday.app/Contents/Resources/mail_reply.js"
+                    let helper = AppResources.path("mail_reply","js")
                     let msg = try MailCalendarService.mailOperation(["read"], helperScriptPath: helper)
                     guard let ident = msg["identity"], let body = msg["body"], let subj = msg["subject"] else {
                         throw FridayError.message("Could not read selected email.")
                     }
                     var draftReq: [String: Any] = ["operation": "mailBody", "question": text, "subject": subj, "body": body]
                     if decision.source == .calendarReply {
-                        draftReq["calendar"] = try MailCalendarService.upcomingCalendarConflicts()
+                        draftReq["calendar"] = try await MailCalendarService.upcomingCalendarConflicts()
                     }
                     let draft = try ScreenInferenceRouter.infer(draftReq, provider: provider, model: model)
-                    _ = try MailCalendarService.mailOperation(["draft", ident, draft], helperScriptPath: helper)
+                    let opened = try MailCalendarService.mailOperation(["draft", ident, draft], helperScriptPath: helper)
                     reply = "Reply draft opened in Apple Mail for review."
+                    if let followUp = decision.followUp {
+                        let title = followUp.title.isEmpty ? "Follow up: " + subj : followUp.title
+                        let proposedDate = followUp.due.flatMap { ISO8601DateFormatter().date(from: $0) }
+                        let panel = NSAlert()
+                        panel.messageText = "Add follow-up to Apple Reminders?"
+                        panel.informativeText = [title, opened["recipients"] ?? ""].joined(separator: "\n")
+                        let date = NSDatePicker(frame: NSRect(x: 0, y: 0, width: 270, height: 28))
+                        date.datePickerElements = [.yearMonthDay, .hourMinute]
+                        date.dateValue = proposedDate ?? Date().addingTimeInterval(86400)
+                        panel.accessoryView = date
+                        panel.addButton(withTitle: "Add reminder")
+                        panel.addButton(withTitle: "Skip")
+                        if panel.runModal() == .alertFirstButtonReturn {
+                            do { try await DesktopTools.addReminder(title, due: date.dateValue); reply += " Follow-up added to Apple Reminders." }
+                            catch { reply += " The follow-up could not be saved. " + error.localizedDescription }
+                        }
+                    }
+                    pendingMailSubject = subj
 
                 case .previous:
                     if let prev = previous {
@@ -922,7 +1006,8 @@ public final class AppState: ObservableObject {
                             userPrompt: text,
                             assistantResponse: lastReply,
                             botName: isGroupSelected ? "Group" : botName,
-                            scope: self.memoryScope,
+                            scope: originatingScope,
+                            source: origin,
                             store: store,
                             provider: self.provider,
                             model: self.model

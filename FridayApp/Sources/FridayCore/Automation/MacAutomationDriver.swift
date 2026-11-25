@@ -128,14 +128,15 @@ public final class MacAutomationDriver {
         return body
     }
 
-    public static func performMacPlan(_ raw: String, refine: (([String]) throws -> MacPlan)? = nil) throws -> String {
+    public static func performMacPlan(_ raw: String, locate: ((URL,String) throws -> [String:Double])? = nil, refine: (([String],[String],String) throws -> MacPlan)? = nil) throws -> String {
         guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"), start <= end,
               let plan = try? JSONDecoder().decode(MacPlan.self, from: Data(raw[start...end].utf8)),
               !plan.app.isEmpty else {
             throw FridayError.message("The model could not identify the app and controls.")
         }
+        func activate(_ requested:String) throws -> NSRunningApplication {
         let workspace = NSWorkspace.shared
-        let appName = plan.app.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appName = requested.trimmingCharacters(in: .whitespacesAndNewlines)
         let appURL = workspace.urlForApplication(withBundleIdentifier: appName)
             ?? workspace.fullPath(forApplication: appName).map { URL(fileURLWithPath: $0) }
         guard let url = appURL, let bundleID = Bundle(url: url)?.bundleIdentifier else {
@@ -149,13 +150,24 @@ public final class MacAutomationDriver {
             Thread.sleep(forTimeInterval: 0.1)
         }
         guard let running = launched else { throw FridayError.message(appName + " did not finish launching.") }
-        let pid = Int(running.processIdentifier)
-        let name = running.localizedName ?? appName
+        return running
+        }
+        var running = try activate(plan.app)
+        var pid = Int(running.processIdentifier)
+        var name = running.localizedName ?? plan.app
         if plan.steps.isEmpty {
             guard running.isActive else { throw FridayError.message(name + " is running, but its activation could not be verified.") }
             return "Opened " + name + "."
         }
 
+        // Launch the local driver before planning the first UI mutation. Only retry a read.
+        if (try? callDriver("list_windows",["pid":pid])) == nil {
+            _ = try ProcessRunner.run("/usr/bin/open",["-g","-a","/Applications/CuaDriver.app"])
+            for _ in 0..<20 {
+                if (try? callDriver("list_windows",["pid":pid])) != nil {break}
+                Thread.sleep(forTimeInterval:0.15)
+            }
+        }
         func window() throws -> [String: Any] {
             for _ in 0..<8 {
                 let windows = try callDriver("list_windows", ["pid": pid])["windows"] as? [[String: Any]] ?? []
@@ -177,15 +189,56 @@ public final class MacAutomationDriver {
         let labels = try elements(window()).compactMap { element in
             (element["label"] as? String) ?? (element["title"] as? String)
         }
-        let grounded = try refine?(Array(labels.prefix(160))) ?? plan
+        let grounded = try refine?(Array(labels.prefix(160)),[],plan.app) ?? plan
         guard grounded.app.caseInsensitiveCompare(plan.app) == .orderedSame, !grounded.steps.isEmpty else {
             throw FridayError.message("Could not resolve the requested controls in " + name + ".")
         }
 
-        for step in grounded.steps {
+        var remaining = ArraySlice(grounded.steps)
+        var completed = [String]()
+        var expected = grounded.expected
+        var lastWindow = try window()["window_id"] as? Int
+        func modalSignature(_ items:[[String:Any]]) -> String {
+            items.filter { ["AXSheet","AXDialog"].contains($0["role"] as? String ?? "") || ($0["subrole"] as? String)=="AXDialog" }
+                .map { ($0["role"] as? String ?? "") + ($0["title"] as? String ?? "") }.joined(separator:"|")
+        }
+        var modal = modalSignature(try elements(window()))
+        var replans = 0
+        while let step = remaining.first {
+            try Task.checkCancellation()
             var args = try window()
+            let observed = try elements(args)
+            let newModal = modalSignature(observed)
+            let missingClick = step.action == "click" && !observed.contains { item in
+                ["label","description","title","value"].contains { (item[$0] as? String)?.caseInsensitiveCompare(step.value) == .orderedSame }
+            }
+            if (args["window_id"] as? Int != lastWindow || modal != newModal || missingClick), let refine {
+                guard replans < 5 else {throw FridayError.message("The active window kept changing.")}
+                replans += 1
+                let current = observed.compactMap {$0["label"] as? String}
+                let revised = try refine(Array(current.prefix(160)),completed,name)
+                guard revised.app.caseInsensitiveCompare(name) == .orderedSame else {throw FridayError.message("Unexpected app during recovery.")}
+                modal = newModal
+                remaining = ArraySlice(revised.steps);expected = revised.expected
+                lastWindow = args["window_id"] as? Int
+                continue
+            }
+            remaining = remaining.dropFirst()
             let tool: String
             switch step.action {
+            case "switchApp":
+                running = try activate(step.value);pid = Int(running.processIdentifier);name = running.localizedName ?? step.value
+                lastWindow = nil;completed.append("Activated "+name);continue
+            case "visualClick":
+                guard let locate else {throw FridayError.message("Visual targeting unavailable.")}
+                let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".png")
+                defer {try? FileManager.default.removeItem(at:url)}
+                var query=args;query["screenshot_out_file"]=url.path;query["include_accessibility_tree"]=false
+                let snapshot=try callDriver("get_window_state",query)
+                guard let capture=snapshot["capture_id"],let width=snapshot["screenshot_width"] as? Int,let height=snapshot["screenshot_height"] as? Int else {throw FridayError.message("No actionable screenshot.")}
+                let point=try locate(url,step.value)
+                guard let x=point["x"],let y=point["y"],x>=0,x<1,y>=0,y<1 else {throw FridayError.message("No unique visual match for "+step.value)}
+                args["capture_id"]=capture;args["x"]=Int(x*Double(width));args["y"]=Int(y*Double(height));tool="click"
             case "key":
                 tool = "press_key"
                 args["key"] = step.value.lowercased() == "esc" ? "escape" : step.value
@@ -215,26 +268,33 @@ public final class MacAutomationDriver {
                 guard response["ok"] as? Bool == true else {
                     throw FridayError.message("Could not click “" + step.value + "” in " + name + ".")
                 }
+                completed.append("click "+step.value)
                 Thread.sleep(forTimeInterval: 0.18)
                 continue
             default:
                 throw FridayError.message("Unsupported UI action in " + name + ": " + step.action)
             }
             args["delivery_mode"] = "foreground"
+            try Task.checkCancellation()
             let result = try callDriver(tool, args)
             if result["error"] != nil || result["effect"] as? String == "refused" {
                 throw FridayError.message(name + " refused the " + step.action + " action.")
             }
+            completed.append(step.action+" "+step.value)
             Thread.sleep(forTimeInterval: 0.18)
         }
 
         let target = try window()
         let values = try elements(target).flatMap { e in ["value", "label", "title"].compactMap { e[$0] as? String } }
         func matches(_ text: String) -> Bool {
-            !grounded.expected.isEmpty && text.range(of: grounded.expected, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            !expected.isEmpty && text.range(of: expected, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
         let finalWindows = try callDriver("list_windows", ["pid": pid])["windows"] as? [[String: Any]] ?? []
         let title = finalWindows.first { ($0["window_id"] as? Int) == (target["window_id"] as? Int) }?["title"] as? String ?? ""
+        if completed.last == "Activated " + name,
+           running.isActive, expected.caseInsensitiveCompare(name) == .orderedSame {
+            return name + " is the active application."
+        }
         var verified = matches(title) || values.contains(where: matches)
         if !verified, let id = target["window_id"], CGPreflightScreenCaptureAccess() {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
@@ -242,6 +302,6 @@ public final class MacAutomationDriver {
             if (try? ProcessRunner.run("/usr/sbin/screencapture", ["-x", "-o", "-l", String(describing: id), url.path])) != nil,
                let text = try? recognizeWindowText(url) { verified = matches(text) }
         }
-        return verified ? name + " shows “" + grounded.expected + "”." : "Sent the requested controls to " + name + ". I could not verify the final result."
+        return verified ? name + " shows “" + expected + "”." : "Sent the requested controls to " + name + ". I could not verify the final result."
     }
 }

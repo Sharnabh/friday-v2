@@ -89,6 +89,7 @@ func avatarColor(for name: String) -> Color {
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.colorScheme) var colorScheme
+    @AppStorage("friday.setupVisited") private var setupVisited = false
     @State private var showCreateBot = false
     @State private var showCreateGroup = false
     @State private var newBotName = ""
@@ -238,6 +239,7 @@ struct ContentView: View {
                     }
 
                     Section("Workspaces") {
+                        Button {state.selectedTab=3} label:{Label("Tools & workspaces",systemImage:"wrench.and.screwdriver")}
                         Button {
                             state.selectedTab = 0
                         } label: {
@@ -256,11 +258,13 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .disabled(state.isBusy)
             }
             .navigationTitle("")
         } detail: {
             Group {
                 switch state.selectedTab {
+                case 3: ToolsWorkspace()
                 case 1:
                     MemoryView()
                 case 2:
@@ -268,6 +272,12 @@ struct ContentView: View {
                 default:
                     ChatView()
                 }
+            }
+        }
+        .onAppear {
+            if !setupVisited {
+                setupVisited = true
+                state.selectedTab = 3
             }
         }
         .sheet(isPresented: $showCreateBot) {
@@ -453,6 +463,7 @@ struct WhatsAppChatRow: View {
 // MARK: - WhatsApp Main Chat View
 
 struct ChatView: View {
+    @FocusState private var composerFocused:Bool
     @EnvironmentObject var state: AppState
     @Environment(\.colorScheme) var colorScheme
     @State private var showSettingsBar = false
@@ -488,6 +499,7 @@ struct ChatView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(.primary)
 
+                    if let task=state.controlTask {Button("Stop action"){task.cancel()}}
                     if state.isBusy {
                         Text(state.statusMessage)
                             .font(.system(size: 12))
@@ -523,6 +535,7 @@ struct ChatView: View {
                         }
                     }
                     .labelsHidden()
+                    .disabled(state.isBusy)
                     .frame(maxWidth: 160)
                     .onChange(of: state.currentSessionId) { _, newId in
                         state.selectSession(newId)
@@ -561,6 +574,7 @@ struct ChatView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .disabled(state.isBusy)
                 .keyboardShortcut("n", modifiers: .command)
                 .help("New Conversation")
 
@@ -600,6 +614,17 @@ struct ChatView: View {
                         .frame(maxWidth: 140)
                     }
 
+                    if NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") != nil {
+                        Button("Wispr Flow"){
+                            state.isWakeEnabled=false
+                            if let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") {
+                                let config=NSWorkspace.OpenConfiguration();config.activates=false
+                                NSWorkspace.shared.openApplication(at:url,configuration:config){_,_ in}
+                            }
+                            composerFocused=true
+                            state.statusMessage="Use your Flow dictation shortcut, then review the message."
+                        }
+                    }
                     Toggle("Hey Friday", isOn: $state.isWakeEnabled)
                         .toggleStyle(.switch)
 
@@ -777,6 +802,7 @@ struct ChatView: View {
                 // WhatsApp Capsule Text Input Field
                 HStack {
                     TextField("Type a message", text: $state.inputMessage)
+                        .focused($composerFocused)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
                         .onSubmit {
@@ -1490,6 +1516,12 @@ struct EditGroupModalView: View {
 }
 
 struct MemoryCardRow: View {
+    @EnvironmentObject var state:AppState
+    @State private var editing=false
+    @State private var bodyDraft=""
+    @State private var audience=""
+    @State private var error=""
+
     let entry: MemoryEntry
     let onDelete: () -> Void
 
@@ -1504,7 +1536,7 @@ struct MemoryCardRow: View {
                     .background((entry.scope == "shared" ? WhatsAppTheme.emerald : Color.blue).opacity(0.15))
                     .cornerRadius(4)
 
-                Text(entry.source)
+                Text(MemoryOrigin.decode(entry.source) == nil ? entry.source : "Chat turn")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
@@ -1520,6 +1552,10 @@ struct MemoryCardRow: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
+                if MemoryOrigin.decode(entry.source) != nil {
+                    Button("Source") {state.showOrigin(entry.source)}
+                }
+                Button("Edit") {bodyDraft=entry.body;audience=entry.scope;error="";editing=true}
                 Button(role: .destructive, action: onDelete) {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
@@ -1533,6 +1569,24 @@ struct MemoryCardRow: View {
                 .font(.system(size: 13))
                 .foregroundColor(.primary)
                 .textSelection(.enabled)
+        }
+        .sheet(isPresented:$editing) {
+            VStack(alignment:.leading) {
+                Text("Edit memory").font(.headline)
+                TextEditor(text:$bodyDraft).frame(minHeight:110)
+                Picker("Audience",selection:$audience) {
+                    Text("Every bot").tag("shared")
+                    Text(state.fridayName).tag("private:")
+                    Text("All-bots group").tag("group:group")
+                    ForEach(state.bots) { Text($0.name).tag("private:"+$0.id) }
+                    ForEach(state.groups) { Text($0.name).tag("group:"+$0.id) }
+                }
+                if !error.isEmpty {Text(error)}
+                HStack {Button("Cancel"){editing=false}; Button("Save"){
+                    do {try state.reviseMemory(entry,body:bodyDraft,scope:audience);editing=false}
+                    catch {self.error=error.localizedDescription}
+                }}
+            }.padding().frame(width:390)
         }
         .padding(.vertical, 6)
     }
@@ -1603,7 +1657,7 @@ struct MemoryView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var searchQuery = ""
     @State private var newMemoryText = ""
-    @State private var isShared = true
+    @State private var isShared = false
     @State private var selectedTab: Int = 0
     @State private var showClearAlert = false
 

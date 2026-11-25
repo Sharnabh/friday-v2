@@ -169,7 +169,8 @@ struct TestRunner {
             print("   Successfully superseded memory in-place: 'User's name is Alexander'")
 
             // Test Natural Language deleteMatching
-            let deleted = try store.deleteMatching(topic: "Alexander", scope: "all")
+            let deleted = try store.previewForget(topic: "Alexander", scope: "shared")
+            try store.forget(topic: "Alexander", scope: "shared", approved: deleted)
             assert(!deleted.isEmpty, "deleteMatching must find and remove matching entries")
             let postDelete = try store.search("Alexander", scope: "all", limit: 10)
             let postTriples = try store.listTriples(scope: "all")

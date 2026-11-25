@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>Friday</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.friday.assistant</string>
+	<key>CFBundleName</key>
+	<string>Friday</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Read your selected Mail message and prepare a reply draft for review.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Check calendar availability when you request a scheduling reply.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Listen through your selected microphone for dictation or the optional Hey Friday wake phrase.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Create the follow-up reminders you approve.</string>
+</dict>
+</plist>

@@ -188,6 +188,7 @@ public final class BackgroundFactExtractor: @unchecked Sendable {
         assistantResponse: String,
         botName: String,
         scope: String,
+        source: String = "Autonomous Extractor",
         store: HybridMemoryStore,
         provider: String,
         model: String
@@ -245,28 +246,16 @@ public final class BackgroundFactExtractor: @unchecked Sendable {
                     let factText = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard Self.isValidDurableFact(factText) else { continue }
 
-                    // Determine scope: if item has explicit scope, use it; otherwise check if it's general user identity
-                    let lower = factText.lowercased()
-                    let isUserIdentity = lower.contains("user's name") || lower.contains("user is named") ||
-                                         lower.contains("user's email") || lower.contains("user's job") ||
-                                         lower.contains("user lives in") || lower.contains("user's role") ||
-                                         lower.contains("user is a") || lower.hasPrefix("user prefers")
-
-                    let factScope = item.scope ?? (isUserIdentity ? "shared" : scope)
-                    try? store.save(factText, scope: factScope, source: "Autonomous Extractor", importance: imp, original: nil)
-                    WorkingMemoryCache.shared.invalidate(scope: factScope)
+                    try store.save(factText, scope: scope, source: source, importance: imp, original: nil)
+                    WorkingMemoryCache.shared.invalidate(scope: scope)
                     Self.shared.onFactSaved?(factText)
                 }
 
                 // 2. Save validated graph relation triples (GraphRAG)
                 for triple in payload.triples {
                     guard Self.isValidDurableTriple(triple) else { continue }
-                    let subLower = triple.subject.lowercased()
-                    let isUserTriple = subLower == "user" || subLower == "human"
-                    let tripleScope = triple.scope ?? (isUserTriple ? "shared" : scope)
-
                     let graphItem = GraphTriple(
-                        scope: tripleScope,
+                        scope: scope,
                         subject: triple.subject,
                         predicate: triple.predicate,
                         object: triple.object,

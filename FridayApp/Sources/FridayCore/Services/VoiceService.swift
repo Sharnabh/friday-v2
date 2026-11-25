@@ -1,26 +1,38 @@
 import Foundation
 import AppKit
 
-public final class VoiceService: NSObject, @unchecked Sendable {
+@MainActor
+public final class VoiceService {
     public static let shared = VoiceService()
 
     private var recorder: Process?
     private var commands: Pipe?
-    private var requesting = false
+    public var isActive: Bool { recorder != nil }
+    private let customLauncher: String?
+    private let transcribe: @Sendable (URL) throws -> String
+
+    init(launcher: String? = nil, transcribe: @escaping @Sendable (URL) throws -> String = VoiceService.whisper) {
+        self.customLauncher = launcher
+        self.transcribe = transcribe
+    }
+
+    nonisolated private static func whisper(_ url: URL) throws -> String {
+        let local = NSHomeDirectory() + "/.hermes/tools/friday-whisper/"
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("Whisper").path
+        let dir = bundled.flatMap {FileManager.default.isExecutableFile(atPath:$0+"/whisper-cli") ? $0+"/" : nil} ?? local
+        return try ProcessRunner.run(dir+"whisper-cli", ["-m",dir+"ggml-small.en.bin","-f",url.path,"-l","en","-ng","-nt","-np"])
+    }
     private var generation = 0
 
-    public var onLevelUpdate: (@Sendable (Double) -> Void)?
-    public var onStateUpdate: (@Sendable (String) -> Void)?
-    public var onTranscriptionComplete: (@Sendable (String) -> Void)?
-    public var onError: (@Sendable (String) -> Void)?
+    public var onLevelUpdate: (@MainActor (Double) -> Void)?
+    public var onStateUpdate: (@MainActor (String) -> Void)?
+    public var onTranscriptionComplete: (@MainActor (String) -> Void)?
+    public var onError: (@MainActor (String) -> Void)?
 
     private var launcherPath: String {
+        if let customLauncher {return customLauncher}
         // Look in main bundle or fallback to outputs/Friday.app resources
-        if let path = Bundle.main.path(forResource: "launch_voice", ofType: "py") {
-            return path
-        }
-        let fallback = "/Users/user/Documents/Codex/2026-11-23/i-w/outputs/Friday.app/Contents/Resources/launch_voice.py"
-        return FileManager.default.fileExists(atPath: fallback) ? fallback : ""
+        return AppResources.path("launch_voice","py")
     }
 
     public func listMicrophones() -> [String] {
@@ -34,7 +46,7 @@ public final class VoiceService: NSObject, @unchecked Sendable {
 
     public func stopCapture() {
         generation += 1
-        requesting = false
+
         if let p = recorder, p.isRunning {
             p.terminate()
         }
@@ -44,6 +56,13 @@ public final class VoiceService: NSObject, @unchecked Sendable {
         onLevelUpdate?(0)
     }
 
+    public func finishCapture() {
+        guard let commands else {return}
+        self.commands = nil
+        do {try commands.fileHandleForWriting.write(contentsOf:Data([10]))}
+        catch { if recorder?.isRunning == true {stopCapture(); onError?(error.localizedDescription)} }
+    }
+
     public func startCapture(handsFree: Bool, micDeviceName: String) {
         stopCapture()
         guard !launcherPath.isEmpty else {
@@ -51,7 +70,7 @@ public final class VoiceService: NSObject, @unchecked Sendable {
             return
         }
 
-        requesting = true
+
         let token = generation
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
 
@@ -65,7 +84,7 @@ public final class VoiceService: NSObject, @unchecked Sendable {
         do {
             try p.run()
         } catch {
-            requesting = false
+
             onError?(error.localizedDescription)
             return
         }
@@ -74,58 +93,30 @@ public final class VoiceService: NSObject, @unchecked Sendable {
         self.commands = control
         onStateUpdate?("Starting microphone…")
 
-        DispatchQueue.global().async {
-            var buffer = Data(), complete = false, issue = ""
-            while true {
-                let data = out.fileHandleForReading.availableData
-                if data.isEmpty { break }
-                buffer.append(data)
-                while let end = buffer.firstIndex(of: 10) {
-                    let line = Data(buffer[..<end])
-                    buffer.removeSubrange(...end)
-                    guard let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { continue }
-                    if let error = event["error"] as? String { issue = error }
-                    if event["complete"] as? Bool == true { complete = true }
-
-                    if self.generation == token {
-                        if let level = event["level"] as? Double {
-                            self.onLevelUpdate?(level)
-                        }
-                        if let state = event["state"] as? String {
-                            self.onStateUpdate?(state)
-                        }
-                    }
-                }
-            }
-            p.waitUntilExit()
-
-            guard self.generation == token else {
-                try? FileManager.default.removeItem(at: url)
-                return
-            }
-
-            self.stopCapture()
-            guard complete else {
-                self.onError?(issue.isEmpty ? "Recording ended without audio" : issue)
-                return
-            }
-
-            // Local Whisper Transcription
-            let whisperDir = NSHomeDirectory() + "/.hermes/tools/friday-whisper/"
-            let whisperCli = whisperDir + "whisper-cli"
-            let modelPath = whisperDir + "ggml-small.en.bin"
-
-            defer { try? FileManager.default.removeItem(at: url) }
-
+        Task {
+            defer {try? FileManager.default.removeItem(at:url)}
             do {
-                self.onStateUpdate?("Transcribing locally…")
-                let transcript = try ProcessRunner.run(
-                    whisperCli,
-                    ["-m", modelPath, "-f", url.path, "-l", "en", "-ng", "-nt", "-np"]
-                )
-                self.onTranscriptionComplete?(transcript)
+                var complete = false, issue = ""
+                for try await line in out.fileHandleForReading.bytes.lines {
+                    guard token == generation else {return}
+                    guard let event = (try? JSONSerialization.jsonObject(with:Data(line.utf8))) as? [String:Any] else {continue}
+                    if let value = event["level"] as? Double {onLevelUpdate?(value)}
+                    if let state = event["state"] as? String {onStateUpdate?(state)}
+                    if let error = event["error"] as? String {issue = error}
+                    if event["complete"] as? Bool == true {complete = true}
+                }
+                guard token == generation else {return}
+                guard complete else {throw FridayError.message(issue.isEmpty ? "Recording ended without audio" : issue)}
+                onStateUpdate?("Transcribing locally…")
+                let transcribe = self.transcribe
+                let text = try await Task.detached {try transcribe(url)}.value
+                guard token == generation else {return}
+                stopCapture()
+                onTranscriptionComplete?(text)
             } catch {
-                self.onError?("Transcription error: " + error.localizedDescription)
+                guard token == generation else {return}
+                stopCapture()
+                onError?(error.localizedDescription)
             }
         }
     }

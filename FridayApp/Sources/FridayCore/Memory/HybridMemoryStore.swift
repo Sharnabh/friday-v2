@@ -348,6 +348,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 }
             }
 
+            try write("DELETE FROM memory_vectors WHERE rowid=?", [String(targetRowid)])
             if let vector = embeddingModel?.vector(for: text) {
                 try storeVector(rowid: targetRowid, scope: scope, vector: vector)
             }
@@ -474,12 +475,11 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 DELETE FROM graph_triples WHERE scope = 'shared';
                 """)
             } else {
-                try write("""
-                DELETE FROM memory_vectors WHERE rowid IN (SELECT rowid FROM memories WHERE scope = ?);
-                DELETE FROM memory_metadata WHERE rowid IN (SELECT rowid FROM memories WHERE scope = ?);
-                DELETE FROM memories WHERE scope = ?;
-                DELETE FROM graph_triples WHERE scope = ?;
-                """, [scope, scope, scope, scope])
+                let ids = "SELECT rowid FROM memories WHERE scope=?"
+                try write("DELETE FROM memory_vectors WHERE rowid IN (" + ids + ")", [scope])
+                try write("DELETE FROM memory_metadata WHERE rowid IN (" + ids + ")", [scope])
+                try write("DELETE FROM memories WHERE scope=?", [scope])
+                try write("DELETE FROM graph_triples WHERE scope=?", [scope])
             }
             try exec("COMMIT")
         } catch {
@@ -488,61 +488,56 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
     }
 
-    public func deleteMatching(topic: String, scope: String = "all") throws -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
+    public struct ForgetMatch: Equatable {
+        let table: String
+        let id: Int64
+        let revision: String
+        public let description: String
+    }
 
-        let clean = topic.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !clean.isEmpty else { return [] }
-
-        // Find matching memories
-        var selectSql = "SELECT m.rowid, m.body FROM memories m WHERE (lower(m.body) LIKE ?"
-        let wildcard = "%\(clean)%"
-        var args = [wildcard]
-        if scope != "all" {
-            selectSql += " AND m.scope IN ('shared', ?))"
-            args.append(scope)
-        } else {
-            selectSql += ")"
+    private func matches(topic: String, scope: String) throws -> [ForgetMatch] {
+        let term = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return [] }
+        var rows = [ForgetMatch]()
+        for (table, sql) in [
+            ("memories", "SELECT rowid, revision, body FROM memories WHERE instr(lower(body),lower(?))>0"),
+            ("graph_triples", "SELECT id, scope, subject || ' — ' || predicate || ' — ' || object FROM graph_triples WHERE instr(lower(subject || ' ' || predicate || ' ' || object),lower(?))>0")
+        ] {
+            let stmt = try statement(sql + " AND scope=? ORDER BY 1", [term,scope])
+            defer { sqlite3_finalize(stmt) }
+            while true {
+                let code = sqlite3_step(stmt)
+                if code == SQLITE_DONE { break }
+                guard code == SQLITE_ROW else {throw failure()}
+                rows.append(ForgetMatch(table:table,id:sqlite3_column_int64(stmt,0),
+                    revision:String(cString:sqlite3_column_text(stmt,1)),description:String(cString:sqlite3_column_text(stmt,2))))
+            }
         }
+        return rows
+    }
 
-        let stmt = try statement(selectSql, args)
-        defer { sqlite3_finalize(stmt) }
+    public func previewForget(topic: String, scope: String) throws -> [ForgetMatch] {
+        lock.lock(); defer {lock.unlock()}
+        return try matches(topic:topic,scope:scope)
+    }
 
-        var matchingIds = [Int64]()
-        var matchingBodies = [String]()
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let id = sqlite3_column_int64(stmt, 0)
-            let body = String(cString: sqlite3_column_text(stmt, 1))
-            matchingIds.append(id)
-            matchingBodies.append(body)
-        }
-
-        // Delete matched memories & corresponding vectors/metadata
+    public func forget(topic: String, scope: String, approved: [ForgetMatch]) throws {
+        lock.lock(); defer {lock.unlock()}
         try exec("BEGIN IMMEDIATE")
         do {
-            for id in matchingIds {
-                try write("DELETE FROM memories WHERE rowid=?", [String(id)])
-                try write("DELETE FROM memory_vectors WHERE rowid=?", [String(id)])
-                try write("DELETE FROM memory_metadata WHERE rowid=?", [String(id)])
+            guard try matches(topic:topic,scope:scope) == approved else {
+                throw FridayError.message("The matching memories changed. Review them again.")
             }
-
-            // Delete matching graph triples
-            var tripleSql = "DELETE FROM graph_triples WHERE (lower(subject) LIKE ? OR lower(predicate) LIKE ? OR lower(object) LIKE ?)"
-            var tripleArgs = [wildcard, wildcard, wildcard]
-            if scope != "all" {
-                tripleSql += " AND scope IN ('shared', ?)"
-                tripleArgs.append(scope)
+            for match in approved {
+                let id = [String(match.id)]
+                if match.table == "memories" {
+                    try write("DELETE FROM memory_vectors WHERE rowid=?",id)
+                    try write("DELETE FROM memory_metadata WHERE rowid=?",id)
+                    try write("DELETE FROM memories WHERE rowid=?",id)
+                } else {try write("DELETE FROM graph_triples WHERE id=?",id)}
             }
-            try write(tripleSql, tripleArgs)
-
             try exec("COMMIT")
-        } catch {
-            try? exec("ROLLBACK")
-            throw error
-        }
-
-        return matchingBodies
+        } catch {try? exec("ROLLBACK"); throw error}
     }
 
     // MARK: - Stanford Generative Agents Composite Search
@@ -565,29 +560,21 @@ public final class HybridMemoryStore: @unchecked Sendable {
         // SIMD-Accelerated vector search
         let vectorResults = try vdspVectorSearch(queryVector, scope: scope, limit: limit)
 
-        // Composite Stanford Scoring: Score = 0.5 * RRF_Relevance + 0.3 * Recency + 0.2 * Importance
+        // BM25 order and cosine similarity dominate; age and importance break close ties.
         var compositeMap = [Int64: Double]()
         var entryMap = [Int64: MemoryEntry]()
         let now = Date().timeIntervalSince1970
-
         for (rank, entry) in lexicalResults.enumerated() {
             entryMap[entry.id] = entry
-            let rrfRelevance = 1.0 / Double(60 + rank + 1)
-            compositeMap[entry.id, default: 0.0] += 0.5 * rrfRelevance
+            compositeMap[entry.id] = 0.60 / Double(rank + 1)
         }
-
-        for (rank, entry) in vectorResults.enumerated() {
+        for entry in vectorResults {
             entryMap[entry.id] = entry
-            let rrfRelevance = 1.0 / Double(60 + rank + 1)
-            compositeMap[entry.id, default: 0.0] += 0.5 * rrfRelevance
+            compositeMap[entry.id, default:0] += 0.35 * max(0, entry.similarity ?? 0)
         }
-
-        // Apply Exponential Recency Decay & Importance
         for (id, entry) in entryMap {
-            let daysSinceAccess = max(0, (now - entry.lastAccessedAt.timeIntervalSince1970) / 86400.0)
-            let recencyScore = exp(-0.05 * daysSinceAccess)
-            let normalizedImportance = Double(entry.importance) / 10.0
-            compositeMap[id, default: 0.0] += (0.3 * recencyScore) + (0.2 * normalizedImportance)
+            let days = max(0, (now - entry.lastAccessedAt.timeIntervalSince1970) / 86400)
+            compositeMap[id, default:0] += 0.03 * exp(-0.05 * days) + 0.02 * Double(entry.importance) / 10
         }
 
         let sorted = compositeMap.sorted { $0.value > $1.value }

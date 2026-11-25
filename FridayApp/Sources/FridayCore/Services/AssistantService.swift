@@ -12,6 +12,8 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         speechSynthesizer.delegate = self
     }
 
+    public var isSpeaking: Bool {speechSynthesizer.isSpeaking}
+
     public func setMuted(_ muted: Bool) {
         self.isMuted = muted
         if muted {

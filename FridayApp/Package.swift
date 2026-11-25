@@ -12,10 +12,12 @@ let package = Package(
         .executable(name: "TestRunner", targets: ["TestRunner"])
     ],
     targets: [
+        .testTarget(name: "FridayCoreTests", dependencies: ["FridayCore"]),
+        .testTarget(name: "FridayAppTests", dependencies: ["FridayApp"]),
         .target(
             name: "FridayCore",
             dependencies: [],
-            path: "Sources/FridayCore"
+            path: "Sources/FridayCore", resources: [.copy("Resources")]
         ),
         .executableTarget(
             name: "FridayApp",

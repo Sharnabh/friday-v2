@@ -277,15 +277,22 @@ public struct MacPlan: Decodable, Sendable {
 
 public struct ScreenRoute: Decodable, Sendable {
     public enum Source: String, Decodable, Sendable {
-        case active, editor, previous, control, remember, mailReply, calendarReply, chat
+        case active, visual, editor, previous, control, remember, mailReply, calendarReply, messageDraft, chat
     }
     public enum Mode: String, Decodable, Sendable {
         case answer, verbatim
     }
+    public struct FollowUp: Decodable, Sendable {
+        public let title: String
+        public let due: String?
+    }
+
+    public let followUp: FollowUp?
     public let source: Source
     public let mode: Mode
     
     public init(source: Source, mode: Mode) {
+        self.followUp = nil
         self.source = source
         self.mode = mode
     }
