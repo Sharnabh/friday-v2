@@ -1,6 +1,54 @@
 import SwiftUI
 import FridayCore
 
+private final class StreamChunkBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var accumulated = ""
+    private var lastEmit: Date = .distantPast
+    private var pendingTrailing = false
+
+    func append(_ chunk: String, onUpdate: @escaping @Sendable (String) -> Void) {
+        lock.lock()
+        let isFirst = accumulated.isEmpty
+        accumulated += chunk
+        let current = accumulated
+        let now = Date()
+        let shouldEmitNow = isFirst || now.timeIntervalSince(lastEmit) >= 0.035
+        if shouldEmitNow {
+            lastEmit = now
+            pendingTrailing = false
+            lock.unlock()
+            onUpdate(current)
+            return
+        }
+        let scheduleTrailing = !pendingTrailing
+        if scheduleTrailing { pendingTrailing = true }
+        lock.unlock()
+
+        if scheduleTrailing {
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.04) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                guard self.pendingTrailing else {
+                    self.lock.unlock()
+                    return
+                }
+                self.pendingTrailing = false
+                self.lastEmit = Date()
+                let text = self.accumulated
+                self.lock.unlock()
+                onUpdate(text)
+            }
+        }
+    }
+
+    func snapshot() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return accumulated
+    }
+}
+
 @MainActor
 public final class AppState: ObservableObject {
     @Published public var inputMessage: String = ""
@@ -657,10 +705,15 @@ public final class AppState: ObservableObject {
 
                 let botName = currentBotName
                 let botInstr = currentBotInstructions
+                let activeProvider = provider
+                let activeModel = model
 
                 if let topic = ForgetRequest.topic(in:text), let store = self.memoryStore {
-                    let local = try store.previewForget(topic:topic,scope:originatingScope)
-                    let shared = try store.previewForget(topic:topic,scope:"shared")
+                    let (local, shared) = try await Task.detached(priority: .userInitiated) {
+                        let l = try store.previewForget(topic: topic, scope: originatingScope)
+                        let s = try store.previewForget(topic: topic, scope: "shared")
+                        return (l, s)
+                    }.value
                     var replyText = "No matching memories in this conversation or shared memory."
                     if !local.isEmpty || !shared.isEmpty {
                         let panel = NSAlert()
@@ -671,7 +724,9 @@ public final class AppState: ObservableObject {
                         panel.addButton(withTitle:"Cancel")
                         panel.addButton(withTitle:"Forget these memories")
                         if panel.runModal() == .alertSecondButtonReturn {
-                            try store.forget(topic:topic,scope:scope,approved:matches)
+                            try await Task.detached(priority: .userInitiated) {
+                                try store.forget(topic: topic, scope: scope, approved: matches)
+                            }.value
                             WorkingMemoryCache.shared.clear()
                             loadMemories()
                             replyText = "Removed the reviewed memories."
@@ -687,10 +742,9 @@ public final class AppState: ObservableObject {
                 }
 
                 // 1. Intelligent Route Decision
-                let routeProvider = provider, routeModel = model
-                let decision = try await Task.detached {
+                let decision = try await Task.detached(priority: .userInitiated) {
                     try ScreenInferenceRouter.routeQuestion(text, history: history, hasPreviousCapture: previous != nil,
-                                                            provider: routeProvider, model: routeModel)
+                                                            provider: activeProvider, model: activeModel)
                 }.value
 
                 // 2. Action or Chat Dispatch
@@ -702,7 +756,9 @@ public final class AppState: ObservableObject {
                         "question": text,
                         "history": history
                     ]
-                    let proposal = try ScreenInferenceRouter.infer(proposalReq, provider: provider, model: model)
+                    let proposal = try await Task.detached(priority: .userInitiated) {
+                        try ScreenInferenceRouter.infer(proposalReq, provider: activeProvider, model: activeModel)
+                    }.value
                     let panel = NSAlert()
                     panel.messageText = "Save this memory?"
                     panel.informativeText = proposal
@@ -714,7 +770,9 @@ public final class AppState: ObservableObject {
                     else {
                         guard let store = memoryStore else {throw FridayError.message("Memory store unavailable.")}
                         let audience = choice == .alertThirdButtonReturn ? "shared" : originatingScope
-                        try store.save(proposal,scope:audience,source:origin,original:nil)
+                        try await Task.detached(priority: .userInitiated) {
+                            try store.save(proposal, scope: audience, source: origin, original: nil)
+                        }.value
                         WorkingMemoryCache.shared.clear()
                         loadMemories()
                         notifyMemoryUpdated(text:proposal)
@@ -723,17 +781,16 @@ public final class AppState: ObservableObject {
 
                 case .control:
                     statusMessage = "Operating Mac app…"
-                    let selectedProvider=provider, selectedModel=model
                     let worker=Task.detached(priority:.userInitiated) {
                         let request:[String:Any]=["operation":"control","question":text]
-                        let initial=try ScreenInferenceRouter.infer(request,provider:selectedProvider,model:selectedModel)
+                        let initial=try ScreenInferenceRouter.infer(request,provider:activeProvider,model:activeModel)
                         try Task.checkCancellation()
                         return try MacAutomationDriver.performMacPlan(initial,locate:{ image,description in
-                            let raw=try ScreenInferenceRouter.infer(["operation":"locate","image":image.path,"question":description],provider:selectedProvider,model:selectedModel)
+                            let raw=try ScreenInferenceRouter.infer(["operation":"locate","image":image.path,"question":description],provider:activeProvider,model:activeModel)
                             return try JSONDecoder().decode([String:Double].self,from:Data(raw.utf8))
                         }) { labels,completed,app in
                             var refined=request;refined["initialPlan"]=initial;refined["visibleControls"]=labels;refined["alreadyCompleted"]=completed;refined["currentApp"]=app
-                            let raw=try ScreenInferenceRouter.infer(refined,provider:selectedProvider,model:selectedModel)
+                            let raw=try ScreenInferenceRouter.infer(refined,provider:activeProvider,model:activeModel)
                             return try JSONDecoder().decode(MacPlan.self,from:Data(raw.utf8))
                         }
                     }
@@ -742,30 +799,44 @@ public final class AppState: ObservableObject {
                     reply=try await worker.value
 
                 case .visual:
-                    let url=try DesktopTools.imageOfActiveWindow()
-                    defer {try? FileManager.default.removeItem(at:url)}
-                    reply=try ScreenInferenceRouter.infer(["operation":"visual","image":url.path,"question":text],provider:provider,model:model)
+                    reply = try await Task.detached(priority: .userInitiated) {
+                        let url = try DesktopTools.imageOfActiveWindow()
+                        defer { try? FileManager.default.removeItem(at: url) }
+                        return try ScreenInferenceRouter.infer(["operation": "visual", "image": url.path, "question": text], provider: activeProvider, model: activeModel)
+                    }.value
                     defaults.set(reply,forKey:cacheKey)
                 case .active:
                     statusMessage = "Reading active window…"
-                    let capture = try MacAutomationDriver.readActiveWindow()
+                    let capture = try await Task.detached(priority: .userInitiated) {
+                        try MacAutomationDriver.readActiveWindow()
+                    }.value
                     defaults.set(String(capture.prefix(12000)), forKey: cacheKey)
                     if decision.mode == .verbatim {reply=capture} else {
                         let answerReq: [String: Any] = ["operation": "answer", "capture": String(capture.prefix(12000)), "question": text]
-                        reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+                        reply = try await Task.detached(priority: .userInitiated) {
+                            try ScreenInferenceRouter.infer(answerReq, provider: activeProvider, model: activeModel)
+                        }.value
                     }
 
                 case .editor:
                     statusMessage = "Reading TextEdit document…"
-                    let capture = try MacAutomationDriver.readEditor(text)
+                    let capture = try await Task.detached(priority: .userInitiated) {
+                        try MacAutomationDriver.readEditor(text)
+                    }.value
                     defaults.set(capture, forKey: cacheKey)
-                    reply = decision.mode == .verbatim ? capture : try ScreenInferenceRouter.infer(
-                        ["operation": "answer", "capture": capture, "question": text], provider: provider, model: model
-                    )
+                    if decision.mode == .verbatim {
+                        reply = capture
+                    } else {
+                        reply = try await Task.detached(priority: .userInitiated) {
+                            try ScreenInferenceRouter.infer(["operation": "answer", "capture": capture, "question": text], provider: activeProvider, model: activeModel)
+                        }.value
+                    }
 
                 case .messageDraft:
-                    let raw = try ScreenInferenceRouter.infer(["operation": "messageBody", "question": text, "history": history],
-                                                              provider: provider, model: model)
+                    let raw = try await Task.detached(priority: .userInitiated) {
+                        try ScreenInferenceRouter.infer(["operation": "messageBody", "question": text, "history": history],
+                                                          provider: activeProvider, model: activeModel)
+                    }.value
                     let draft = try JSONDecoder().decode([String: String].self, from: Data(raw.utf8))
                     guard let body = draft["body"], !body.isEmpty,
                           let service = NSSharingService(named: .composeMessage) else {
@@ -778,7 +849,9 @@ public final class AppState: ObservableObject {
                 case .mailReply, .calendarReply:
                     statusMessage = "Drafting Apple Mail reply…"
                     let helper = AppResources.path("mail_reply","js")
-                    let msg = try MailCalendarService.mailOperation(["read"], helperScriptPath: helper)
+                    let msg = try await Task.detached(priority: .userInitiated) {
+                        try MailCalendarService.mailOperation(["read"], helperScriptPath: helper)
+                    }.value
                     guard let ident = msg["identity"], let body = msg["body"], let subj = msg["subject"] else {
                         throw FridayError.message("Could not read selected email.")
                     }
@@ -786,8 +859,13 @@ public final class AppState: ObservableObject {
                     if decision.source == .calendarReply {
                         draftReq["calendar"] = try await MailCalendarService.upcomingCalendarConflicts()
                     }
-                    let draft = try ScreenInferenceRouter.infer(draftReq, provider: provider, model: model)
-                    let opened = try MailCalendarService.mailOperation(["draft", ident, draft], helperScriptPath: helper)
+                    let reqSnapshot = draftReq
+                    let (draft, opened) = try await Task.detached(priority: .userInitiated) {
+                        let d = try ScreenInferenceRouter.infer(reqSnapshot, provider: activeProvider, model: activeModel)
+                        let o = try MailCalendarService.mailOperation(["draft", ident, d], helperScriptPath: helper)
+                        return (d, o)
+                    }.value
+                    _ = draft
                     reply = "Reply draft opened in Apple Mail for review."
                     if let followUp = decision.followUp {
                         let title = followUp.title.isEmpty ? "Follow up: " + subj : followUp.title
@@ -811,37 +889,39 @@ public final class AppState: ObservableObject {
                 case .previous:
                     if let prev = previous {
                         let answerReq: [String: Any] = ["operation": "answer", "capture": prev, "question": text]
-                        reply = try ScreenInferenceRouter.infer(answerReq, provider: provider, model: model)
+                        reply = try await Task.detached(priority: .userInitiated) {
+                            try ScreenInferenceRouter.infer(answerReq, provider: activeProvider, model: activeModel)
+                        }.value
                     } else {
                         reply = "No previous screen capture available for follow-up."
                     }
 
                 case .chat:
-                    // 1. Working Memory & Identity Context Retrieval
+                    // 1. Working Memory & Identity Context Retrieval (off main thread)
                     var context = ""
-                    let cacheKey = self.memoryScope + "::" + text
+                    let scope = self.memoryScope
+                    let cacheKey = scope + "::" + text
                     if let cached = WorkingMemoryCache.shared.get(key: cacheKey) {
                         context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
                     } else if let store = memoryStore {
-                        var contextLines = [String]()
+                        context = await Task.detached(priority: .userInitiated) {
+                            var contextLines = [String]()
+                            let lowerText = text.lowercased()
+                            let isIdentityQuery = lowerText.contains("my name") || lowerText.contains("who am i") ||
+                                                 lowerText.contains("who i am") || lowerText.contains("know me") ||
+                                                 lowerText.contains("what's my name")
 
-                        let lowerText = text.lowercased()
-                        let isIdentityQuery = lowerText.contains("my name") || lowerText.contains("who am i") ||
-                                             lowerText.contains("who i am") || lowerText.contains("know me") ||
-                                             lowerText.contains("what's my name")
-
-                        // Graph Triples Join (GraphRAG)
-                        let tripleQuery = isIdentityQuery ? "name user" : text
-                        if let triples = try? store.queryTriples(query: tripleQuery, scope: memoryScope, limit: 3), !triples.isEmpty {
-                            contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
-                        }
-                        // Hybrid Stanford-Scored Semantic Memories
-                        let searchQuery = isIdentityQuery ? "user name" : text
-                        if let results = try? store.search(searchQuery, scope: memoryScope, limit: 3) {
-                            WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
-                            contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
-                        }
-                        context = contextLines.joined(separator: "\n")
+                            let tripleQuery = isIdentityQuery ? "name user" : text
+                            if let triples = try? store.queryTriples(query: tripleQuery, scope: scope, limit: 3), !triples.isEmpty {
+                                contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
+                            }
+                            let searchQuery = isIdentityQuery ? "user name" : text
+                            if let results = try? store.search(searchQuery, scope: scope, limit: 3) {
+                                WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
+                                contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
+                            }
+                            return contextLines.joined(separator: "\n")
+                        }.value
                     }
 
                     // 2. Discover Candidate Bots (Group or Active + @Mentions)
@@ -885,7 +965,7 @@ public final class AppState: ObservableObject {
                         let single = candidates[0]
                         self.statusMessage = "\(single.name) is typing…"
 
-                        var botAccumulated = ""
+                        let streamBuffer = StreamChunkBuffer()
                         turns.append(single.name + "\n")
                         self.currentTranscript = turns
 
@@ -900,15 +980,16 @@ public final class AppState: ObservableObject {
                             botName: single.name,
                             botInstructions: single.instructions,
                             onChunk: { chunk in
-                                Task { @MainActor in
-                                    botAccumulated += chunk
-                                    if let lastIdx = self.currentTranscript.indices.last {
-                                        self.currentTranscript[lastIdx] = single.name + "\n" + botAccumulated
+                                streamBuffer.append(chunk) { snapshot in
+                                    Task { @MainActor in
+                                        if let lastIdx = self.currentTranscript.indices.last, self.isBusy {
+                                            self.currentTranscript[lastIdx] = single.name + "\n" + snapshot
+                                        }
                                     }
                                 }
                             }
                         )
-                        let cleanReply = AssistantService.cleanBotReply(reply.isEmpty ? botAccumulated : reply, botName: single.name)
+                        let cleanReply = AssistantService.cleanBotReply(reply.isEmpty ? streamBuffer.snapshot() : reply, botName: single.name)
                         if turns.indices.contains(turns.count - 1) {
                             turns[turns.count - 1] = single.name + "\n" + cleanReply
                         }
@@ -923,8 +1004,8 @@ public final class AppState: ObservableObject {
                             transcript: turns,
                             userMessage: text,
                             candidateBots: candidates.map { ($0.name, $0.instructions) },
-                            provider: provider,
-                            model: model
+                            provider: activeProvider,
+                            model: activeModel
                         )
 
                         for targetName in respondingNames {
@@ -932,7 +1013,7 @@ public final class AppState: ObservableObject {
 
                             self.statusMessage = "\(target.name) is typing…"
 
-                            var botAccumulated = ""
+                            let streamBuffer = StreamChunkBuffer()
                             turns.append(target.name + "\n")
                             self.currentTranscript = turns
 
@@ -967,16 +1048,17 @@ public final class AppState: ObservableObject {
                                 provider: target.provider,
                                 model: target.model,
                                 onChunk: { chunk in
-                                    Task { @MainActor in
-                                        botAccumulated += chunk
-                                        if let lastIdx = self.currentTranscript.indices.last {
-                                            self.currentTranscript[lastIdx] = target.name + "\n" + botAccumulated
+                                    streamBuffer.append(chunk) { snapshot in
+                                        Task { @MainActor in
+                                            if let lastIdx = self.currentTranscript.indices.last, self.isBusy {
+                                                self.currentTranscript[lastIdx] = target.name + "\n" + snapshot
+                                            }
                                         }
                                     }
                                 }
                             )
                             let memberReply = AssistantService.cleanBotReply(
-                                rawMemberReply.isEmpty ? botAccumulated : rawMemberReply,
+                                rawMemberReply.isEmpty ? streamBuffer.snapshot() : rawMemberReply,
                                 botName: target.name,
                                 otherBotNames: candidates.map(\.name)
                             )

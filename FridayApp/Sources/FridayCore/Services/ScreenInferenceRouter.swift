@@ -31,6 +31,26 @@ public final class ScreenInferenceRouter {
     }
 
     public static func routeQuestion(_ question: String, history: [String], hasPreviousCapture: Bool, provider: String, model: String) throws -> ScreenRoute {
+        let lower = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // Fast-path unambiguous conversational turns so chat doesn't stall behind a pre-route LLM call,
+        // while keeping full routing for any screen, visual, editor, mail, calendar, message, memory, or UI control intent.
+        let actionKeywords = [
+            "screen", "window", "display", "look", "see", "read", "visible", "screenshot",
+            "chart", "graph", "diagram", "image", "picture", "layout",
+            "textedit", "editor", "document", "file",
+            "mail", "email", "inbox", "reply", "calendar", "schedule", "meeting", "availability", "free", "busy", "remind", "follow up", "followup",
+            "imessage", "sms", "message", "text ", "draft", "remember", "save",
+            "open", "launch", "switch", "click", "press", "type", "scroll", "close", "quit", "control", "calculator", "safari", "notes", "finder", "app"
+        ]
+        let contextualFollowUpWords = ["that", "this", "it", "previous", "above"]
+        let needsActionRoute = actionKeywords.contains { lower.contains($0) }
+            || (hasPreviousCapture && contextualFollowUpWords.contains { lower.contains($0) })
+
+        if !needsActionRoute {
+            return ScreenRoute(source: .chat, mode: .answer)
+        }
+
         let request: [String: Any] = [
             "operation": "route",
             "question": question,

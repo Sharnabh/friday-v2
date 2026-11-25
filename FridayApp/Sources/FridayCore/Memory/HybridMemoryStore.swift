@@ -488,7 +488,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
     }
 
-    public struct ForgetMatch: Equatable {
+    public struct ForgetMatch: Equatable, Sendable {
         let table: String
         let id: Int64
         let revision: String

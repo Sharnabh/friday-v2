@@ -463,10 +463,11 @@ struct WhatsAppChatRow: View {
 // MARK: - WhatsApp Main Chat View
 
 struct ChatView: View {
-    @FocusState private var composerFocused:Bool
     @EnvironmentObject var state: AppState
     @Environment(\.colorScheme) var colorScheme
     @State private var showSettingsBar = false
+    @State private var composerHeight: CGFloat = 22
+    @State private var composerFocusTrigger: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -621,7 +622,7 @@ struct ChatView: View {
                                 let config=NSWorkspace.OpenConfiguration();config.activates=false
                                 NSWorkspace.shared.openApplication(at:url,configuration:config){_,_ in}
                             }
-                            composerFocused=true
+                            composerFocusTrigger += 1
                             state.statusMessage="Use your Flow dictation shortcut, then review the message."
                         }
                     }
@@ -654,11 +655,17 @@ struct ChatView: View {
                     .ignoresSafeArea()
 
                 ScrollViewReader { proxy in
+                    let botNames = state.mentionableBots.map(\.name)
+                    let lastIndex = state.currentTranscript.indices.last
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(state.currentTranscript.enumerated()), id: \.offset) { index, turn in
-                                ChatBubble(text: turn)
-                                    .id(index)
+                                ChatBubble(
+                                    text: turn,
+                                    botNames: botNames,
+                                    isStreamingTurn: state.isBusy && index == lastIndex
+                                )
+                                .id(index)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -786,7 +793,7 @@ struct ChatView: View {
             }
 
             // WhatsApp Bottom Input Bar
-            HStack(spacing: 10) {
+            HStack(alignment: .bottom, spacing: 10) {
                 // Attachment Button
                 Button {
                     withAnimation { showSettingsBar.toggle() }
@@ -799,19 +806,19 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .help("Quick Settings")
 
-                // WhatsApp Capsule Text Input Field
+                // WhatsApp Capsule Auto-Expanding Text Composer (Enter sends, Shift+Enter inserts newline)
                 HStack {
-                    TextField("Type a message", text: $state.inputMessage)
-                        .focused($composerFocused)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .onSubmit {
-                            state.sendMessage()
-                        }
-                        .disabled(state.isBusy)
+                    WhatsAppComposerView(
+                        text: $state.inputMessage,
+                        dynamicHeight: $composerHeight,
+                        isDisabled: state.isBusy,
+                        focusTrigger: composerFocusTrigger,
+                        onSubmit: { state.sendMessage() }
+                    )
+                    .frame(height: composerHeight)
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.vertical, 7)
                 .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
                 .cornerRadius(20)
                 .overlay(
@@ -820,7 +827,7 @@ struct ChatView: View {
                 )
 
                 // Voice Recording or WhatsApp Green Send Button
-                if state.inputMessage.trimmingCharacters(in: .whitespaces).isEmpty {
+                if state.inputMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         state.toggleVoiceRecording()
                     } label: {
@@ -1323,12 +1330,155 @@ struct MarkdownMessageView: View {
     }
 }
 
+// MARK: - Multiline WhatsApp Composer (Shift+Enter newline, Enter send)
+
+struct WhatsAppComposerView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var dynamicHeight: CGFloat
+    var isDisabled: Bool
+    var focusTrigger: Int
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        let textView = NSTextView()
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.textColor = NSColor.labelColor
+        textView.insertionPointColor = NSColor.labelColor
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 2
+
+        let placeholder = NSTextField(labelWithString: "Type a message")
+        placeholder.font = NSFont.systemFont(ofSize: 14)
+        placeholder.textColor = NSColor.placeholderTextColor
+        placeholder.isBezeled = false
+        placeholder.isEditable = false
+        placeholder.isSelectable = false
+        placeholder.drawsBackground = false
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+
+        scrollView.documentView = textView
+        scrollView.addSubview(placeholder)
+        NSLayoutConstraint.activate([
+            placeholder.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 2),
+            placeholder.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 2)
+        ])
+
+        context.coordinator.textView = textView
+        context.coordinator.placeholderField = placeholder
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = context.coordinator.textView else { return }
+
+        textView.isEditable = !isDisabled
+        textView.textColor = isDisabled ? NSColor.secondaryLabelColor : NSColor.labelColor
+
+        if textView.string != text {
+            textView.string = text
+            let end = (text as NSString).length
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: end, length: 0))
+        }
+
+        context.coordinator.placeholderField?.isHidden = !text.isEmpty
+
+        if focusTrigger != context.coordinator.lastFocusTrigger {
+            context.coordinator.lastFocusTrigger = focusTrigger
+            DispatchQueue.main.async {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
+
+        context.coordinator.recalculateHeight(containerWidth: scrollView.bounds.width)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: WhatsAppComposerView
+        weak var textView: NSTextView?
+        weak var placeholderField: NSTextField?
+        var lastFocusTrigger: Int = 0
+        private var lastMeasuredWidth: CGFloat = 0
+
+        init(_ parent: WhatsAppComposerView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            let updated = textView.string
+            if parent.text != updated {
+                parent.text = updated
+            }
+            placeholderField?.isHidden = !updated.isEmpty
+            recalculateHeight(containerWidth: textView.enclosingScrollView?.bounds.width ?? 0)
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    textView.insertNewlineIgnoringFieldEditor(nil)
+                    return true
+                }
+                if !parent.isDisabled {
+                    parent.onSubmit()
+                }
+                return true
+            }
+            return false
+        }
+
+        func recalculateHeight(containerWidth: CGFloat) {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return }
+            if containerWidth > 0 && abs(containerWidth - lastMeasuredWidth) > 0.5 {
+                lastMeasuredWidth = containerWidth
+                textContainer.containerSize = NSSize(width: containerWidth, height: .greatestFiniteMagnitude)
+            }
+            layoutManager.ensureLayout(for: textContainer)
+            let used = layoutManager.usedRect(for: textContainer).height
+            let minH: CGFloat = 22
+            let maxH: CGFloat = 124
+            let target = min(maxH, max(minH, ceil(used + 4)))
+            if abs(parent.dynamicHeight - target) > 0.5 {
+                DispatchQueue.main.async {
+                    self.parent.dynamicHeight = target
+                }
+            }
+        }
+    }
+}
+
 // MARK: - WhatsApp Chat Bubble
 
 struct ChatBubble: View {
     let text: String
+    let botNames: [String]
+    let isStreamingTurn: Bool
     @Environment(\.colorScheme) var colorScheme
-    @EnvironmentObject var state: AppState
 
     var isUser: Bool {
         text.hasPrefix("You\n")
@@ -1343,7 +1493,7 @@ struct ChatBubble: View {
         let lines = text.components(separatedBy: "\n")
         let raw = lines.dropFirst().joined(separator: "\n")
         if !isUser {
-            return AssistantService.cleanBotReply(raw, botName: senderName, otherBotNames: state.mentionableBots.map(\.name))
+            return AssistantService.cleanBotReply(raw, botName: senderName, otherBotNames: botNames)
         }
         return raw
     }
@@ -1362,7 +1512,7 @@ struct ChatBubble: View {
                             .padding(.bottom, 1)
                     }
 
-                    if bodyText.isEmpty && state.isBusy {
+                    if bodyText.isEmpty && isStreamingTurn {
                         // Subtle animated typing indicator while waiting for first tokens
                         HStack(spacing: 4) {
                             Circle().fill(Color.secondary.opacity(0.6)).frame(width: 5, height: 5)

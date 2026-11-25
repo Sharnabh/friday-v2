@@ -129,6 +129,68 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func runHermesStream(
+        args: [String],
+        onChunk: (@Sendable (String) -> Void)?
+    ) async throws -> (output: String, stderr: String, terminationStatus: Int32) {
+        let hermesPath = NSHomeDirectory() + "/.local/bin/hermes"
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        env["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+        process.environment = env
+        process.executableURL = URL(fileURLWithPath: hermesPath)
+        process.arguments = args
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+
+        let errTask = Task.detached {
+            String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }
+
+        let output = try await Task.detached(priority: .userInitiated) {
+            var accumulated = ""
+            var resultText: String? = nil
+            var fallbackPlain = ""
+            let outHandle = stdoutPipe.fileHandleForReading
+
+            for try await line in outHandle.bytes.lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("{") && trimmed.hasSuffix("}"),
+                   let data = trimmed.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let type = json["type"] as? String {
+                    if type == "text", let chunk = json["text"] as? String {
+                        accumulated += chunk
+                        onChunk?(chunk)
+                    } else if type == "result", let text = json["text"] as? String {
+                        resultText = text
+                    }
+                } else {
+                    if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
+                        continue
+                    }
+                    if resultText == nil && accumulated.isEmpty {
+                        fallbackPlain += line + "\n"
+                        onChunk?(line + "\n")
+                    }
+                }
+            }
+
+            process.waitUntilExit()
+            return resultText ?? (accumulated.isEmpty ? fallbackPlain : accumulated)
+        }.value
+
+        let errText = await errTask.value
+        return (output, errText, process.terminationStatus)
+    }
+
     /// Executes a clean, direct prompt without artificial wrapper templates
     public func executeRawChat(
         prompt: String,
@@ -141,48 +203,8 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         if !model.isEmpty { args += ["--model", model] }
         args += ["-q", prompt]
 
-        let hermesPath = NSHomeDirectory() + "/.local/bin/hermes"
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        process.executableURL = URL(fileURLWithPath: hermesPath)
-        process.arguments = args
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        var accumulated = ""
-        var resultText: String? = nil
-        var fallbackPlain = ""
-        let outHandle = stdoutPipe.fileHandleForReading
-        try process.run()
-
-        for try await line in outHandle.bytes.lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("{") && trimmed.hasSuffix("}"),
-               let data = trimmed.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let type = json["type"] as? String {
-                if type == "text", let chunk = json["text"] as? String {
-                    accumulated += chunk
-                    onChunk?(chunk)
-                } else if type == "result", let text = json["text"] as? String {
-                    resultText = text
-                }
-            } else {
-                if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
-                    continue
-                }
-                if resultText == nil && accumulated.isEmpty {
-                    fallbackPlain += line + "\n"
-                    onChunk?(line + "\n")
-                }
-            }
-        }
-
-        process.waitUntilExit()
-        let finalOutput = resultText ?? (accumulated.isEmpty ? fallbackPlain : accumulated)
-        return Self.cleanHermesOutput(finalOutput)
+        let result = try await runHermesStream(args: args, onChunk: onChunk)
+        return Self.cleanHermesOutput(result.output)
     }
 
     /// Context-aware turn orchestrator: decides which candidate bot(s) should speak given the conversation context and user message
@@ -289,55 +311,10 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         """
         args += ["-q", fullPrompt]
 
-        let hermesPath = NSHomeDirectory() + "/.local/bin/hermes"
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        process.executableURL = URL(fileURLWithPath: hermesPath)
-        process.arguments = args
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        var accumulated = ""
-        var resultText: String? = nil
-        var fallbackPlain = ""
-        let outHandle = stdoutPipe.fileHandleForReading
-
-        try process.run()
-
-        for try await line in outHandle.bytes.lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("{") && trimmed.hasSuffix("}"),
-               let data = trimmed.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let type = json["type"] as? String {
-                if type == "text", let chunk = json["text"] as? String {
-                    accumulated += chunk
-                    onChunk?(chunk)
-                } else if type == "result", let text = json["text"] as? String {
-                    resultText = text
-                }
-            } else {
-                if line.hasPrefix("Resume this session with:") || line.hasPrefix("Session: ") || line.hasPrefix("Duration: ") || line.hasPrefix("Messages: ") || line.hasPrefix("▼ Hermes") || line.hasPrefix("session_id: ") || line.hasPrefix("↻ Resumed session") {
-                    continue
-                }
-                if resultText == nil && accumulated.isEmpty {
-                    fallbackPlain += line + "\n"
-                    onChunk?(line + "\n")
-                }
-            }
-        }
-
-        process.waitUntilExit()
-
-        let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let errText = String(decoding: errData, as: UTF8.self)
-
-        let finalOutput = resultText ?? (accumulated.isEmpty ? fallbackPlain : accumulated)
-        let cleaned = Self.cleanBotReply(finalOutput, botName: botName)
-        if process.terminationStatus != 0 && cleaned.isEmpty {
-            throw FridayError.message("Inference failed: " + errText)
+        let result = try await runHermesStream(args: args, onChunk: onChunk)
+        let cleaned = Self.cleanBotReply(result.output, botName: botName)
+        if result.terminationStatus != 0 && cleaned.isEmpty {
+            throw FridayError.message("Inference failed: " + result.stderr)
         }
 
         return cleaned
