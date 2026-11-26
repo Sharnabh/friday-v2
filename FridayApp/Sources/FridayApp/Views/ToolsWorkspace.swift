@@ -38,6 +38,12 @@ struct ToolsWorkspace:View {
     @State private var browser:ResearchBrowser?
     @State private var research:Task<Void,Never>?
     @State private var feedback=""
+    @State private var savedVoiceOverride = false
+    @State private var voiceKeyAvailable = false
+    private func refreshVoiceKey() {
+        savedVoiceOverride = SpeechCredential.read() != nil
+        voiceKeyAvailable = savedVoiceOverride || AssistantService.hasOpenRouterAPIKey()
+    }
     @State private var researching=false
     private func startResearch(_ browser:ResearchBrowser) {
         research?.cancel()
@@ -111,6 +117,40 @@ struct ToolsWorkspace:View {
                         }
                     }
                 }
+                GroupBox("Voice & speech (OpenRouter HeyGen)") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Picker("Active bot voice", selection: $state.currentBotVoice) {
+                                ForEach(HeyGenTTSCatalog.voices) { v in
+                                    Text(v.label).tag(v.id)
+                                }
+                            }
+                            .disabled(state.isGroupSelected)
+                            Picker("TTS model", selection: $state.openRouterTTSModel) {
+                                ForEach(HeyGenTTSCatalog.availableModels, id: \.id) { item in
+                                    Text(item.label).tag(item.id)
+                                }
+                            }
+                        }
+                        HStack {
+                            SecureField("OpenRouter API key override (optional if in ~/.hermes/.env)", text: $state.openRouterAPIKey)
+                            Button("Save key") { state.saveSpeechCredential(); refreshVoiceKey() }
+                                .disabled(state.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            if savedVoiceOverride {
+                                Button("Remove key") { state.saveSpeechCredential(remove: true); refreshVoiceKey() }
+                            }
+                            Button("Test Voice") {
+                                state.previewVoice(state.currentBotVoice, botName: state.currentBotName)
+                            }
+                        }
+                        if !state.speechCredentialStatus.isEmpty { Text(state.speechCredentialStatus).font(.caption) }
+                        Text(voiceKeyAvailable
+                             ? "OpenRouter TTS key configured. HeyGen voices use OpenRouter. System Default uses macOS Speech."
+                             : "Add OPENROUTER_API_KEY above or in ~/.hermes/.env to use HeyGen voices (otherwise falls back to macOS Speech).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 GroupBox("Messages draft"){
                     VStack {TextField("Recipient",text:$recipient);TextField("Message",text:$bodyText)
                         Button("Review in Messages"){
@@ -169,7 +209,7 @@ struct ToolsWorkspace:View {
                 LocalTools()
                 Text(feedback).textSelection(.enabled)
             }.padding()
-        }.task {catalog=await Task.detached {DesktopTools.models()}.value}
+        }.onAppear(perform: refreshVoiceKey).task {catalog=await Task.detached {DesktopTools.models()}.value}
         .task(id:state.activeBotId){research?.cancel();researching=false;handoff=UserDefaults.standard.string(forKey:"research.result."+state.activeBotId) ?? "";taskText=UserDefaults.standard.string(forKey:"research.task."+state.activeBotId) ?? "";browser=ResearchBrowser(owner:state.activeBotId)}
         .onDisappear{research?.cancel()}
     }

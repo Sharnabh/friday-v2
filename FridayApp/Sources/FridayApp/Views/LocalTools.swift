@@ -44,7 +44,7 @@ struct LocalTools:View {
     }
     private func helper(_ name:String,_ args:[String],_ success:String) {
         Task {do {
-            let text=try await Task.detached {try ProcessRunner.run("/usr/bin/python3",[AppResources.path(name,"py")]+args)}.value
+            let text=try await Task.detached {try ProcessRunner.run(AppResources.python,[AppResources.path(name,"py")]+args)}.value
             status=text.isEmpty ? success : text
         }catch {status=error.localizedDescription}}
     }

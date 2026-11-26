@@ -37,7 +37,7 @@ public final class VoiceService {
 
     public func listMicrophones() -> [String] {
         guard !launcherPath.isEmpty else { return [] }
-        guard let result = try? ProcessRunner.run("/usr/bin/python3", [launcherPath, "devices"]),
+        guard let result = try? ProcessRunner.run(AppResources.python, [launcherPath, "devices"]),
               let names = try? JSONDecoder().decode([String].self, from: Data(result.utf8)) else {
             return []
         }
@@ -75,7 +75,7 @@ public final class VoiceService {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
 
         let p = Process(), out = Pipe(), control = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        p.executableURL = URL(fileURLWithPath: AppResources.python)
         p.arguments = [launcherPath, handsFree ? "wake" : "manual", micDeviceName, url.path]
         p.standardOutput = out
         p.standardInput = control

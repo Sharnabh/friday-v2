@@ -5,34 +5,333 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
     public static let shared = AssistantService()
     
     private let speechSynthesizer = AVSpeechSynthesizer()
+    private let audioEngine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    private let ttsLock = NSLock()
     private var isMuted = false
+    private var speechGeneration: Int = 0
+    private var activeSpeechTask: Task<Void, Never>?
+    private var isPlayingPCM: Bool = false
+    private var audioFormatSampleRate: Double = 0
+    public var onSpeechError: (@Sendable (String) -> Void)?
 
     override private init() {
         super.init()
         speechSynthesizer.delegate = self
+        audioEngine.attach(playerNode)
     }
 
-    public var isSpeaking: Bool {speechSynthesizer.isSpeaking}
+    public var isSpeaking: Bool {
+        ttsLock.lock()
+        let pcmActive = isPlayingPCM
+        ttsLock.unlock()
+        return speechSynthesizer.isSpeaking || pcmActive
+    }
 
-    public func setMuted(_ muted: Bool) {
+    @MainActor public func setMuted(_ muted: Bool) {
+        ttsLock.lock()
         self.isMuted = muted
+        ttsLock.unlock()
         if muted {
             stopSpeaking()
         }
     }
 
-    public func speak(_ text: String) {
-        guard !isMuted else { return }
-        stopSpeaking()
-        let utterance = AVSpeechUtterance(string: String(text.prefix(1500)))
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        speechSynthesizer.speak(utterance)
+    @MainActor public func speak(_ text: String, voice: String = "", force: Bool = false) {
+        speakSequence([(text: text, voice: voice)], force: force)
     }
 
-    public func stopSpeaking() {
+    @MainActor public func speakSequence(_ items: [(text: String, voice: String)], force: Bool = false) {
+        let prepared = items.compactMap { item -> (text: String, voice: String)? in
+            let cleaned = Self.stripMarkdownForSpeech(item.text)
+            guard !cleaned.isEmpty else { return nil }
+            return (text: String(cleaned.prefix(1800)), voice: item.voice.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard !prepared.isEmpty else { return }
+
+        ttsLock.lock()
+        let muted = isMuted
+        if muted && !force {
+            ttsLock.unlock()
+            return
+        }
+        speechGeneration += 1
+        let gen = speechGeneration
+        activeSpeechTask?.cancel()
+        activeSpeechTask = nil
+        isPlayingPCM = false
+        ttsLock.unlock()
+
         if speechSynthesizer.isSpeaking {
             speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        playerNode.stop()
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            for item in prepared {
+                if Task.isCancelled || !self.isCurrentGeneration(gen) { return }
+                let chosenVoice = item.voice
+                if !chosenVoice.isEmpty, let apiKey = Self.resolveOpenRouterAPIKey() {
+                    do {
+                        let (pcmData, sampleRate) = try await Self.fetchHeyGenSpeechPCM(
+                            text: item.text,
+                            voice: chosenVoice,
+                            model: Self.selectedOpenRouterTTSModel(),
+                            apiKey: apiKey
+                        )
+                        if Task.isCancelled || !self.isCurrentGeneration(gen) { return }
+                        try await self.playPCMData(pcmData, sampleRate: sampleRate, generation: gen)
+                        continue
+                    } catch {
+                        if Task.isCancelled || !self.isCurrentGeneration(gen) { return }
+                        self.onSpeechError?("HeyGen TTS fallback to system voice: \(error.localizedDescription)")
+                    }
+                }
+                if Task.isCancelled || !self.isCurrentGeneration(gen) { return }
+                await self.speakWithSystemSynthesizer(item.text, generation: gen)
+            }
+        }
+
+        ttsLock.lock()
+        if speechGeneration == gen {
+            activeSpeechTask = task
+        } else {
+            task.cancel()
+        }
+        ttsLock.unlock()
+    }
+
+    @MainActor public func stopSpeaking() {
+        ttsLock.lock()
+        speechGeneration += 1
+        activeSpeechTask?.cancel()
+        activeSpeechTask = nil
+        isPlayingPCM = false
+        ttsLock.unlock()
+
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        playerNode.stop()
+    }
+
+    private func isCurrentGeneration(_ gen: Int) -> Bool {
+        ttsLock.lock()
+        defer { ttsLock.unlock() }
+        return speechGeneration == gen
+    }
+
+    @MainActor private func speakWithSystemSynthesizer(_ text: String, generation: Int) async {
+        guard isCurrentGeneration(generation) else { return }
+        await MainActor.run {
+            guard self.isCurrentGeneration(generation) else { return }
+            let utterance = AVSpeechUtterance(string: String(text.prefix(1500)))
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+            self.speechSynthesizer.speak(utterance)
+        }
+        while !Task.isCancelled && isCurrentGeneration(generation) && speechSynthesizer.isSpeaking {
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+    }
+
+    public static func selectedOpenRouterTTSModel() -> String {
+        let saved = UserDefaults.standard.string(forKey: "friday.openrouterTTSModel")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return saved.isEmpty ? HeyGenTTSCatalog.defaultModel : saved
+    }
+
+    public static func hasOpenRouterAPIKey() -> Bool {
+        resolveOpenRouterAPIKey() != nil
+    }
+
+    public static func resolveOpenRouterAPIKey() -> String? {
+        if let custom = SpeechCredential.read(),
+           !custom.isEmpty {
+            return custom
+        }
+        if let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envKey.isEmpty {
+            return envKey
+        }
+        let envURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes/.env")
+        if let rawEnv = try? String(contentsOf: envURL, encoding: .utf8) {
+            for line in rawEnv.components(separatedBy: .newlines) {
+                var trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                if trimmed.hasPrefix("export ") {
+                    trimmed = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                }
+                guard let eq = trimmed.firstIndex(of: "=") else { continue }
+                let k = String(trimmed[..<eq]).trimmingCharacters(in: .whitespaces)
+                if k == "OPENROUTER_API_KEY" {
+                    var val = String(trimmed[trimmed.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                    if (val.hasPrefix("\"") && val.hasSuffix("\"")) || (val.hasPrefix("'") && val.hasSuffix("'")) {
+                        val = String(val.dropFirst().dropLast())
+                    }
+                    if !val.isEmpty { return val }
+                }
+            }
+        }
+        let authURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes/auth.json")
+        if let data = try? Data(contentsOf: authURL),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let providers = root["providers"] as? [String: Any],
+               let orProvider = providers["openrouter"] as? [String: Any],
+               let key = (orProvider["api_key"] as? String ?? orProvider["key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !key.isEmpty {
+                return key
+            }
+            if let pool = root["credential_pool"] as? [String: Any],
+               let entries = pool["openrouter"] as? [[String: Any]] {
+                for entry in entries {
+                    if let key = (entry["api_key"] as? String ?? entry["key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !key.isEmpty {
+                        return key
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    public static func stripMarkdownForSpeech(_ raw: String) -> String {
+        var s = raw
+        if let fenceRx = try? NSRegularExpression(pattern: "```[\\s\\S]*?```", options: []) {
+            s = fenceRx.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length), withTemplate: " Code block omitted. ")
+        }
+        for sym in ["**", "__", "`", "### ", "## ", "# "] {
+            s = s.replacingOccurrences(of: sym, with: "")
+        }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func parseOpenRouterSampleRate(contentType: String?) -> Double {
+        guard let contentType else { return 44100 }
+        if let rx = try? NSRegularExpression(pattern: "rate=(\\d+)", options: [.caseInsensitive]),
+           let match = rx.firstMatch(in: contentType, range: NSRange(location: 0, length: (contentType as NSString).length)),
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: contentType),
+           let rate = Double(contentType[range]), rate >= 8000, rate <= 192000 {
+            return rate
+        }
+        return 44100
+    }
+
+    public static func pcm16ToFloat32(_ data: Data) -> [Float] {
+        let sampleCount = data.count / 2
+        guard sampleCount > 0 else { return [] }
+        var output = [Float](repeating: 0, count: sampleCount)
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            for i in 0..<sampleCount {
+                let lo = UInt16(bytes[i * 2])
+                let hi = UInt16(bytes[i * 2 + 1]) << 8
+                let sample = Int16(bitPattern: lo | hi)
+                output[i] = Float(sample) / 32768.0
+            }
+        }
+        return output
+    }
+
+    private static func fetchHeyGenSpeechPCM(text: String, voice: String, model: String, apiKey: String) async throws -> (Data, Double) {
+        guard let url = URL(string: HeyGenTTSCatalog.speechEndpoint) else {
+            throw FridayError.message("Invalid OpenRouter speech URL.")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Friday", forHTTPHeaderField: "X-Title")
+        let payload: [String: Any] = [
+            "model": model,
+            "input": text,
+            "voice": voice,
+            "response_format": "pcm"
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FridayError.message("Unexpected non-HTTP response from OpenRouter.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw FridayError.message("OpenRouter TTS failed (\(http.statusCode)): \(String(msg.prefix(200)))")
+        }
+        let sampleRate = parseOpenRouterSampleRate(contentType: http.value(forHTTPHeaderField: "Content-Type"))
+        return (data, sampleRate)
+    }
+
+    @MainActor private func playPCMData(_ data: Data, sampleRate: Double, generation: Int) async throws {
+        let floats = Self.pcm16ToFloat32(data)
+        guard !floats.isEmpty,
+              let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(floats.count)) else {
+            throw FridayError.message("Empty or unsupported PCM audio returned by OpenRouter.")
+        }
+        buffer.frameLength = AVAudioFrameCount(floats.count)
+        if let channel = buffer.floatChannelData?[0] {
+            floats.withUnsafeBufferPointer { src in
+                if let base = src.baseAddress {
+                    channel.update(from: base, count: floats.count)
+                }
+            }
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let stateLock = ttsLock
+            final class OnceGate: @unchecked Sendable {
+                var done = false
+            }
+            let gate = OnceGate()
+            let resumeOnce: @Sendable (Result<Void, Error>) -> Void = { [weak self] result in
+                stateLock.lock()
+                let shouldResume = !gate.done
+                if shouldResume { gate.done = true }
+                if self?.speechGeneration == generation {
+                    self?.isPlayingPCM = false
+                }
+                stateLock.unlock()
+                if shouldResume {
+                    continuation.resume(with: result)
+                }
+            }
+
+            do {
+                try startEngineIfNeeded(format: format)
+                stateLock.lock()
+                guard speechGeneration == generation else {
+                    stateLock.unlock()
+                    resumeOnce(.success(()))
+                    return
+                }
+                isPlayingPCM = true
+                stateLock.unlock()
+
+                playerNode.stop()
+                playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in
+                    resumeOnce(.success(()))
+                }
+                playerNode.play()
+            } catch {
+                resumeOnce(.failure(error))
+            }
+        }
+    }
+
+    private func startEngineIfNeeded(format: AVAudioFormat) throws {
+        ttsLock.lock()
+        defer { ttsLock.unlock() }
+        if abs(audioFormatSampleRate - format.sampleRate) > 1 {
+            if audioEngine.isRunning { audioEngine.stop() }
+            audioEngine.disconnectNodeOutput(playerNode)
+            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
+            audioFormatSampleRate = format.sampleRate
+        }
+        if !audioEngine.isRunning {
+            try audioEngine.start()
         }
     }
 

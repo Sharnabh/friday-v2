@@ -24,7 +24,9 @@ def save(folder):
     domains = subprocess.check_output(["defaults", "domains"], text=True).strip().split(", ")
     settings = folder / "settings.plist"
     if DOMAIN in domains:
-        subprocess.run(["defaults", "export", DOMAIN, str(settings)], check=True)
+        values = plistlib.loads(subprocess.check_output(["defaults", "export", DOMAIN, "-"]))
+        values.pop("friday.openrouterApiKey", None)
+        settings.write_bytes(plistlib.dumps(values))
     else:
         settings.write_bytes(plistlib.dumps({}))
     has_memory = DB.exists()
@@ -54,7 +56,9 @@ def restore(folder):
     save(recovery)
     try:
         apply_memory(folder, manifest["memory"])
-        subprocess.run(["defaults","import",DOMAIN,str(folder/"settings.plist")],check=True)
+        values = plistlib.loads((folder / "settings.plist").read_bytes())
+        values.pop("friday.openrouterApiKey", None)
+        subprocess.run(["defaults", "import", DOMAIN, "-"], input=plistlib.dumps(values), check=True)
     except Exception:
         apply_memory(recovery, (recovery/"Memory.sqlite").exists())
         subprocess.run(["defaults","import",DOMAIN,str(recovery/"settings.plist")],check=True)

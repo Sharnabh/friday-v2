@@ -52,6 +52,7 @@ private final class StreamChunkBuffer: @unchecked Sendable {
 @MainActor
 public final class AppState: ObservableObject {
     @Published public var inputMessage: String = ""
+    @Published public var showScreenPermissionHelp = false
     @Published public var statusMessage: String = "Ready"
     @Published public var isBusy: Bool = false
     @Published public var currentTranscript: [String] = []
@@ -69,7 +70,16 @@ public final class AppState: ObservableObject {
     }
     @Published public var audioLevel: Double = 0.0
     @Published public var availableMics: [String] = []
-    @Published public var selectedMic: String = ""
+    @Published public var selectedMic: String = "" {
+        didSet {
+            guard selectedMic != oldValue else { return }
+            defaults.set(selectedMic, forKey: "fridayMic")
+            if isWakeEnabled {
+                VoiceService.shared.stopCapture()
+                armWakeIfReady()
+            }
+        }
+    }
 
     // Bots and Groups
     @Published public var activeBotId: String = "" {
@@ -97,11 +107,34 @@ public final class AppState: ObservableObject {
     @Published public var activities: [ActivityEntry] = []
     @Published public var selectedTab: Int = 0 // 0: Messages, 1: Memory Vault, 2: Reminders
 
-    // Persona & Instructions Editing
+    // Persona, Voice & Instructions Editing
     @Published public var showEditPersonaModal: Bool = false
     @Published public var editingBotId: String = ""
     @Published public var editingBotName: String = ""
     @Published public var editingBotInstructions: String = ""
+    @Published public var editingBotVoice: String = ""
+    @Published public var openRouterAPIKey = ""
+    @Published public private(set) var speechCredentialStatus = ""
+
+    public func saveSpeechCredential(remove: Bool = false) {
+        do {
+            try SpeechCredential.save(remove ? "" : openRouterAPIKey)
+            defaults.removeObject(forKey: "friday.openrouterApiKey")
+            openRouterAPIKey = ""
+            speechCredentialStatus = remove ? "Removed the saved voice key." : "Voice key saved in Keychain."
+        } catch {
+            speechCredentialStatus = "Keychain: " + error.localizedDescription
+        }
+    }
+
+    @Published public var openRouterTTSModel: String = HeyGenTTSCatalog.defaultModel {
+        didSet {
+            if !loadingVoiceSettings {
+                defaults.set(openRouterTTSModel, forKey: "friday.openrouterTTSModel")
+            }
+        }
+    }
+    private var loadingVoiceSettings = false
 
     // Group Editing & Member Management
     @Published public var showEditGroupModal: Bool = false
@@ -119,6 +152,7 @@ public final class AppState: ObservableObject {
     public var activityService: ActivityService
 
     private let defaults:UserDefaults
+    private var activeStream: StreamChunkBuffer?
     private var reminderTimer: Timer?
 
     public init(defaults:UserDefaults = .standard,
@@ -144,6 +178,21 @@ public final class AppState: ObservableObject {
                 self?.notifyMemoryUpdated(text: fact)
                 self?.loadMemories()
             }
+        }
+
+        loadingVoiceSettings = true
+        if startServices, let legacy = defaults.string(forKey: "friday.openrouterApiKey"), !legacy.isEmpty {
+            do {
+                try SpeechCredential.save(legacy)
+                defaults.removeObject(forKey: "friday.openrouterApiKey")
+            } catch { speechCredentialStatus = "Could not move the saved voice key to Keychain." }
+        }
+        let savedTTSModel = defaults.string(forKey: "friday.openrouterTTSModel") ?? ""
+        self.openRouterTTSModel = savedTTSModel.isEmpty ? HeyGenTTSCatalog.defaultModel : savedTTSModel
+        loadingVoiceSettings = false
+
+        AssistantService.shared.onSpeechError = { [weak self] message in
+            Task { @MainActor in self?.statusMessage = message }
         }
 
         loadBotsAndGroups()
@@ -174,7 +223,8 @@ public final class AppState: ObservableObject {
     private func setupVoicePipeline() {
         let voice = VoiceService.shared
         self.availableMics = voice.listMicrophones()
-        self.selectedMic = defaults.string(forKey: "fridayMic") ?? availableMics.first ?? ""
+        let savedMic = defaults.string(forKey: "fridayMic") ?? ""
+        self.selectedMic = availableMics.contains(savedMic) ? savedMic : availableMics.first ?? ""
 
         voice.onLevelUpdate = { [weak self] level in self?.audioLevel = level }
         voice.onStateUpdate = { [weak self] state in
@@ -219,12 +269,19 @@ public final class AppState: ObservableObject {
         statusMessage = "Reminder: " + rem.text
         try? activityService.append(ActivityEntry(date: Date(), scheduled: rem.due, action: "Reminder Fired", subject: rem.text))
         loadReminders()
-        AssistantService.shared.speak("Reminder: " + rem.text)
+        AssistantService.shared.speak("Reminder: " + rem.text, voice: fridayVoice)
     }
 
     public func loadBotsAndGroups() {
         if let botDict = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] {
-            self.bots = botDict.map { BotProfile(id: $0.key, name: $0.value["name"] ?? "Bot", instructions: $0.value["instructions"] ?? "") }.sorted(by: { $0.name < $1.name })
+            self.bots = botDict.map {
+                BotProfile(
+                    id: $0.key,
+                    name: $0.value["name"] ?? "Bot",
+                    instructions: $0.value["instructions"] ?? "",
+                    voice: $0.value["voice"] ?? ""
+                )
+            }.sorted(by: { $0.name < $1.name })
         }
         if let groupData = defaults.data(forKey: "namedGroups"),
            let groupMap = try? JSONDecoder().decode([String: BotGroup].self, from: groupData) {
@@ -259,6 +316,48 @@ public final class AppState: ObservableObject {
         defaults.string(forKey: "fridayCustomInstructions") ?? ""
     }
 
+    public var fridayVoice: String {
+        defaults.string(forKey: "fridayCustomVoice") ?? ""
+    }
+
+    public func voiceForBot(id: String) -> String {
+        if id.isEmpty {
+            return fridayVoice
+        }
+        return bots.first(where: { $0.id == id })?.voice ?? ""
+    }
+
+    public var currentBotVoice: String {
+        get {
+            guard !isGroupSelected else { return "" }
+            return voiceForBot(id: activeBotId)
+        }
+        set {
+            setVoiceForBot(id: activeBotId, voice: newValue)
+        }
+    }
+
+    public func setVoiceForBot(id: String, voice: String) {
+        if id.isEmpty {
+            defaults.set(voice, forKey: "fridayCustomVoice")
+            objectWillChange.send()
+        } else {
+            var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
+            var entry = current[id] ?? [:]
+            entry["voice"] = voice
+            current[id] = entry
+            defaults.set(current, forKey: "fridayBots")
+            loadBotsAndGroups()
+        }
+    }
+
+    public func previewVoice(_ voice: String, botName: String) {
+        let name = botName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = HeyGenTTSCatalog.voices.first(where: { $0.id == voice })?.label ?? voice
+        let sample = "Hello! I'm \(name.isEmpty ? fridayName : name), speaking with \(voice.isEmpty ? "the macOS system voice" : label)."
+        AssistantService.shared.speak(sample, voice: voice, force: true)
+    }
+
     public var currentBotName: String {
         if isGroupSelected {
             return groups.first(where: { $0.id == activeBotId })?.name ?? "Group Chat"
@@ -284,18 +383,26 @@ public final class AppState: ObservableObject {
         activeBotId = id
     }
 
-    public func updateBot(id: String, name: String, instructions: String) {
+    public func updateBot(id: String, name: String, instructions: String, voice: String? = nil) {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if id.isEmpty {
             // Updating Core Friday
             defaults.set(cleanName.isEmpty ? "FRIDAY" : cleanName, forKey: "fridayCustomName")
             defaults.set(instructions, forKey: "fridayCustomInstructions")
+            if let voice {
+                defaults.set(voice, forKey: "fridayCustomVoice")
+            }
             objectWillChange.send()
             self.statusMessage = "Updated \(fridayName) persona"
         } else {
             // Updating custom bot
             var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
-            current[id] = ["name": cleanName.isEmpty ? "Bot" : cleanName, "instructions": instructions]
+            let existingVoice = current[id]?["voice"] ?? ""
+            current[id] = [
+                "name": cleanName.isEmpty ? "Bot" : cleanName,
+                "instructions": instructions,
+                "voice": voice ?? existingVoice
+            ]
             defaults.set(current, forKey: "fridayBots")
             loadBotsAndGroups()
             self.statusMessage = "Updated \(cleanName)"
@@ -311,11 +418,13 @@ public final class AppState: ObservableObject {
             editingBotId = ""
             editingBotName = fridayName
             editingBotInstructions = fridayInstructions
+            editingBotVoice = fridayVoice
             showEditPersonaModal = true
         } else if let b = bots.first(where: { $0.id == targetId }) {
             editingBotId = b.id
             editingBotName = b.name
             editingBotInstructions = b.instructions
+            editingBotVoice = b.voice
             showEditPersonaModal = true
         }
     }
@@ -454,10 +563,10 @@ public final class AppState: ObservableObject {
         self.currentTranscript = defaults.stringArray(forKey: key) ?? []
     }
 
-    public func createBot(name: String, instructions: String) {
+    public func createBot(name: String, instructions: String, voice: String = "") {
         let id = UUID().uuidString
         var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
-        current[id] = ["name": name, "instructions": instructions]
+        current[id] = ["name": name, "instructions": instructions, "voice": voice]
         defaults.set(current, forKey: "fridayBots")
         loadBotsAndGroups()
         selectBot(id)
@@ -700,7 +809,7 @@ public final class AppState: ObservableObject {
         Task {
             do {
                 let cacheKey = activeBotScope + "screen." + sessionID
-                let history = turns.suffix(3).map { String($0.prefix(2000)) }
+                let history = turns.dropLast().suffix(3).map { String($0.prefix(2000)) }
                 let previous = defaults.string(forKey: cacheKey)
 
                 let botName = currentBotName
@@ -737,7 +846,7 @@ public final class AppState: ObservableObject {
                     self.currentTranscript = turns
                     self.statusMessage = "Ready"
                     self.isBusy = false
-                    AssistantService.shared.speak(replyText)
+                    AssistantService.shared.speak(replyText, voice: voiceForBot(id: activeBotId))
                     return
                 }
 
@@ -799,6 +908,10 @@ public final class AppState: ObservableObject {
                     reply=try await worker.value
 
                 case .visual:
+                    guard CGPreflightScreenCaptureAccess() else {
+                        showScreenPermissionHelp = true
+                        throw FridayError.message("Allow FRIDAY to capture the visible window in Screen Recording settings.")
+                    }
                     reply = try await Task.detached(priority: .userInitiated) {
                         let url = try DesktopTools.imageOfActiveWindow()
                         defer { try? FileManager.default.removeItem(at: url) }
@@ -807,9 +920,15 @@ public final class AppState: ObservableObject {
                     defaults.set(reply,forKey:cacheKey)
                 case .active:
                     statusMessage = "Reading active window…"
-                    let capture = try await Task.detached(priority: .userInitiated) {
-                        try MacAutomationDriver.readActiveWindow()
-                    }.value
+                    let capture: String
+                    do {
+                        capture = try await Task.detached(priority: .userInitiated) {
+                            try MacAutomationDriver.readActiveWindow()
+                        }.value
+                    } catch {
+                        if !CGPreflightScreenCaptureAccess() { showScreenPermissionHelp = true }
+                        throw error
+                    }
                     defaults.set(String(capture.prefix(12000)), forKey: cacheKey)
                     if decision.mode == .verbatim {reply=capture} else {
                         let answerReq: [String: Any] = ["operation": "answer", "capture": String(capture.prefix(12000)), "question": text]
@@ -966,6 +1085,7 @@ public final class AppState: ObservableObject {
                         self.statusMessage = "\(single.name) is typing…"
 
                         let streamBuffer = StreamChunkBuffer()
+                        activeStream = streamBuffer
                         turns.append(single.name + "\n")
                         self.currentTranscript = turns
 
@@ -982,13 +1102,14 @@ public final class AppState: ObservableObject {
                             onChunk: { chunk in
                                 streamBuffer.append(chunk) { snapshot in
                                     Task { @MainActor in
-                                        if let lastIdx = self.currentTranscript.indices.last, self.isBusy {
+                                        if let lastIdx = self.currentTranscript.indices.last, self.isBusy, self.activeStream === streamBuffer {
                                             self.currentTranscript[lastIdx] = single.name + "\n" + snapshot
                                         }
                                     }
                                 }
                             }
                         )
+                        activeStream = nil
                         let cleanReply = AssistantService.cleanBotReply(reply.isEmpty ? streamBuffer.snapshot() : reply, botName: single.name)
                         if turns.indices.contains(turns.count - 1) {
                             turns[turns.count - 1] = single.name + "\n" + cleanReply
@@ -997,7 +1118,7 @@ public final class AppState: ObservableObject {
                         self.currentTranscript = turns
                         self.statusMessage = "Ready"
                         self.isBusy = false
-                        AssistantService.shared.speak(cleanReply)
+                        AssistantService.shared.speak(cleanReply, voice: voiceForBot(id: single.id))
                     } else {
                         self.statusMessage = "Orchestrating agent collaboration…"
                         let respondingNames = try await AssistantService.shared.resolveRespondingBots(
@@ -1008,12 +1129,14 @@ public final class AppState: ObservableObject {
                             model: activeModel
                         )
 
+                        var speechQueue = [(text: String, voice: String)]()
                         for targetName in respondingNames {
                             guard let target = candidates.first(where: { $0.name.caseInsensitiveCompare(targetName) == .orderedSame }) else { continue }
 
                             self.statusMessage = "\(target.name) is typing…"
 
                             let streamBuffer = StreamChunkBuffer()
+                            activeStream = streamBuffer
                             turns.append(target.name + "\n")
                             self.currentTranscript = turns
 
@@ -1050,13 +1173,14 @@ public final class AppState: ObservableObject {
                                 onChunk: { chunk in
                                     streamBuffer.append(chunk) { snapshot in
                                         Task { @MainActor in
-                                            if let lastIdx = self.currentTranscript.indices.last, self.isBusy {
+                                            if let lastIdx = self.currentTranscript.indices.last, self.isBusy, self.activeStream === streamBuffer {
                                                 self.currentTranscript[lastIdx] = target.name + "\n" + snapshot
                                             }
                                         }
                                     }
                                 }
                             )
+                            activeStream = nil
                             let memberReply = AssistantService.cleanBotReply(
                                 rawMemberReply.isEmpty ? streamBuffer.snapshot() : rawMemberReply,
                                 botName: target.name,
@@ -1066,6 +1190,7 @@ public final class AppState: ObservableObject {
                                 if turns.indices.contains(turns.count - 1) {
                                     turns[turns.count - 1] = target.name + "\n" + memberReply
                                 }
+                                speechQueue.append((text: memberReply, voice: voiceForBot(id: target.id)))
                             } else {
                                 if !turns.isEmpty { turns.removeLast() }
                             }
@@ -1075,9 +1200,8 @@ public final class AppState: ObservableObject {
 
                         self.statusMessage = "Ready"
                         self.isBusy = false
-                        if let lastTurn = turns.last {
-                            let textToSpeak = lastTurn.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
-                            AssistantService.shared.speak(textToSpeak)
+                        if !speechQueue.isEmpty {
+                            AssistantService.shared.speakSequence(speechQueue)
                         }
                     }
 
@@ -1104,7 +1228,7 @@ public final class AppState: ObservableObject {
                     self.currentTranscript = turns
                     self.statusMessage = "Ready"
                     self.isBusy = false
-                    AssistantService.shared.speak(reply)
+                    AssistantService.shared.speak(reply, voice: voiceForBot(id: activeBotId))
                 }
 
             } catch {

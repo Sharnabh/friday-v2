@@ -176,15 +176,62 @@ public struct ChatSessionItem: Identifiable, Hashable, Sendable {
     }
 }
 
+public struct HeyGenVoiceOption: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
+public enum HeyGenTTSCatalog {
+    public static let speechEndpoint = "https://openrouter.ai/api/v1/audio/speech"
+    public static let defaultModel = "heygen/heygen-voice-1-turbo"
+    public static let availableModels: [(id: String, label: String)] = [
+        ("heygen/heygen-voice-1-turbo", "HeyGen Voice Turbo (Low Latency)"),
+        ("heygen/heygen-voice-1", "HeyGen Voice Standard")
+    ]
+
+    public static let voices: [HeyGenVoiceOption] = [
+        HeyGenVoiceOption(id: "", label: "System Default (macOS)"),
+        HeyGenVoiceOption(id: "nadine", label: "Nadine (HeyGen)"),
+        HeyGenVoiceOption(id: "tabitha", label: "Tabitha (HeyGen)"),
+        HeyGenVoiceOption(id: "noelle", label: "Noelle (HeyGen)"),
+        HeyGenVoiceOption(id: "meredith", label: "Meredith (HeyGen)"),
+        HeyGenVoiceOption(id: "sabrina", label: "Sabrina (HeyGen)"),
+        HeyGenVoiceOption(id: "bram", label: "Bram (HeyGen)"),
+        HeyGenVoiceOption(id: "gareth", label: "Gareth (HeyGen)"),
+        HeyGenVoiceOption(id: "lucian", label: "Lucian (HeyGen)"),
+        HeyGenVoiceOption(id: "weston", label: "Weston (HeyGen)"),
+        HeyGenVoiceOption(id: "vincent", label: "Vincent (HeyGen)")
+    ]
+}
+
 public struct BotProfile: Codable, Identifiable, Sendable {
     public var id: String
     public var name: String
     public var instructions: String
-    
-    public init(id: String, name: String, instructions: String) {
+    public var voice: String
+
+    public init(id: String, name: String, instructions: String, voice: String = "") {
         self.id = id
         self.name = name
         self.instructions = instructions
+        self.voice = voice
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.instructions = try container.decode(String.self, forKey: .instructions)
+        self.voice = (try? container.decodeIfPresent(String.self, forKey: .voice)) ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, instructions, voice
     }
 }
 

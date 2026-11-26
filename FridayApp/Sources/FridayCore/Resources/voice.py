@@ -83,15 +83,19 @@ def main():
     rate = int(device["default_samplerate"])
     block = round(rate * 0.08)
     engine = None
-    if mode == "wake":
-        engine = _build_engine(dict(load_wake_word_config(), provider="sherpa", phrase="hey friday", sensitivity=0.20, profile_routing=False))
-    fallback = WakeFallback() if engine else None
+    waiting_for_wake = mode == "wake"
+    if waiting_for_wake:
+        try:
+            engine = _build_engine(dict(load_wake_word_config(), provider="sherpa", phrase="hey friday", sensitivity=0.20, profile_routing=False))
+        except (RuntimeError, OSError, ImportError, ValueError):
+            engine = None
+    fallback = WakeFallback() if waiting_for_wake else None
     silent_blocks = 0
     frames = []
     heard = False
     quiet = 0
     with sd.InputStream(device=device["index"], samplerate=rate, channels=1, dtype="int16", blocksize=block) as stream:
-        emit("state", "Say Hey Friday" if engine else "Listening")
+        emit("state", "Say Hey Friday" if waiting_for_wake else "Listening")
         while True:
             if select.select([sys.stdin], [], [], 0)[0]:
                 if not sys.stdin.readline() or not frames:
@@ -101,7 +105,7 @@ def main():
             frame = _resample_audio_frame(np, raw, 1280)
             rms = float(np.sqrt(np.mean(frame.astype(float) ** 2)))
             emit("level", min(1, rms / 4000))
-            if engine:
+            if waiting_for_wake:
                 if rms < 3:
                     silent_blocks += 1
                     if silent_blocks == 38:
@@ -112,9 +116,10 @@ def main():
                     silent_blocks = 0
                 gain = min(6.0, max(1.0, 1200 / max(1, rms))) if rms >= 20 else 1.0
                 normalized = np.clip(frame.astype(float) * gain, -32768, 32767).astype(np.int16)
-                if engine.process(normalized) or fallback.process(frame, rms):
-                    engine.close()
-                    engine = None
+                if (engine is not None and engine.process(normalized)) or fallback.process(frame, rms):
+                    if engine is not None:
+                        engine.close()
+                    waiting_for_wake = False
                     emit("state", "Listening")
                 continue
             frames.append(frame.tobytes())

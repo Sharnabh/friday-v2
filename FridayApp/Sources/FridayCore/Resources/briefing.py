@@ -26,7 +26,7 @@ def configure(hour, watch):
     AGENT.parent.mkdir(parents=True, exist_ok=True)
     if watch and not Path(watch).is_file():
         raise ValueError("Choose an existing file")
-    config = {"Label": LABEL, "ProgramArguments": ["/usr/bin/python3", str(Path(__file__).resolve()), "run", str(hour), watch],
+    config = {"Label": LABEL, "ProgramArguments": [sys.executable, str(Path(__file__).resolve()), "run", str(hour), watch],
               "StartCalendarInterval": {"Hour": hour, "Minute": 0}, "RunAtLoad": True, "StartInterval": 900}
     if watch:
         config["WatchPaths"] = [watch]

@@ -82,4 +82,23 @@ final class RegressionTests: XCTestCase {
             XCTAssertFalse(service.isActive)
         }
     }
+
+    func testHeyGenPCMConversionAndSampleRateParsing() {
+        XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: nil), 44100)
+        XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: "audio/pcm;rate=24000"), 24000)
+        XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: "audio/pcm; rate=44100"), 44100)
+
+        // Signed 16-bit little-endian: 0, +16384 (~0.5), -32768 (-1.0)
+        let bytes: [UInt8] = [0x00, 0x00, 0x00, 0x40, 0x00, 0x80]
+        let floats = AssistantService.pcm16ToFloat32(Data(bytes))
+        XCTAssertEqual(floats.count, 3)
+        XCTAssertEqual(floats[0], 0.0, accuracy: 0.0001)
+        XCTAssertEqual(floats[1], 0.5, accuracy: 0.0001)
+        XCTAssertEqual(floats[2], -1.0, accuracy: 0.0001)
+
+        let spoken = AssistantService.stripMarkdownForSpeech("**Kiara**: Here is `code`.\n```swift\nlet x = 1\n```")
+        XCTAssertFalse(spoken.contains("**"))
+        XCTAssertFalse(spoken.contains("`"))
+        XCTAssertTrue(spoken.contains("Code block omitted."))
+    }
 }

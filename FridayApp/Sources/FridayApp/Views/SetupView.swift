@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import EventKit
+import FridayCore
 
 struct SetupView: View {
     private struct Check: Identifiable {
@@ -15,15 +16,7 @@ struct SetupView: View {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         let hermes = home.appendingPathComponent(".local/bin/hermes")
-        let installRoot = home.appendingPathComponent(".hermes/installs")
-        let facts = (try? fm.contentsOfDirectory(at: installRoot, includingPropertiesForKeys: nil)) ?? []
-        let pythonReady = facts.contains { install in
-            guard let data = try? Data(contentsOf: install.appendingPathComponent("facts.json")),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let packages = root["packages"] as? [String: Any],
-                  let venv = packages["venv"] as? [String: Any], let path = venv["environment"] as? String else { return false }
-            return fm.isExecutableFile(atPath: path + "/bin/python")
-        }
+        let pythonReady = AppResources.hermesPython != nil
         let voiceRoots = [Bundle.main.resourceURL?.appendingPathComponent("Whisper"),
                           home.appendingPathComponent(".hermes/tools/friday-whisper")].compactMap { $0 }
         let voice = voiceRoots.contains { dir in

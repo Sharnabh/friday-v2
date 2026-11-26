@@ -94,6 +94,7 @@ struct ContentView: View {
     @State private var showCreateGroup = false
     @State private var newBotName = ""
     @State private var newBotInstructions = ""
+    @State private var newBotVoice = ""
     @State private var newGroupName = ""
     @State private var selectedGroupMembers = Set<String>()
     @State private var searchChatQuery = ""
@@ -280,6 +281,23 @@ struct ContentView: View {
                 state.selectedTab = 3
             }
         }
+        .sheet(isPresented: $state.showScreenPermissionHelp) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Allow screen capture").font(.headline)
+                Text("Open Screen Recording settings, then drag FRIDAY into the list and enable it.")
+                Label("FRIDAY", systemImage: "app.dashed")
+                    .padding(10)
+                    .onDrag { NSItemProvider(object: Bundle.main.bundleURL as NSURL) }
+                HStack {
+                    Button("Open Screen Recording settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Button("Done") { state.showScreenPermissionHelp = false }
+                }
+            }.padding(20).frame(width: 370)
+        }
         .sheet(isPresented: $showCreateBot) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Create Assistant Bot")
@@ -290,13 +308,24 @@ struct ContentView: View {
                     .lineLimit(4...8)
                     .textFieldStyle(.roundedBorder)
                 HStack {
+                    Picker("Voice", selection: $newBotVoice) {
+                        ForEach(HeyGenTTSCatalog.voices) { v in
+                            Text(v.label).tag(v.id)
+                        }
+                    }
+                    Button("Preview") {
+                        state.previewVoice(newBotVoice, botName: newBotName)
+                    }
+                }
+                HStack {
                     Spacer()
                     Button("Cancel") { showCreateBot = false }
                     Button("Create") {
                         if !newBotName.isEmpty {
-                            state.createBot(name: newBotName, instructions: newBotInstructions)
+                            state.createBot(name: newBotName, instructions: newBotInstructions, voice: newBotVoice)
                             newBotName = ""
                             newBotInstructions = ""
+                            newBotVoice = ""
                             showCreateBot = false
                         }
                     }
@@ -370,6 +399,23 @@ struct ContentView: View {
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
                 }
 
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Voice (OpenRouter HeyGen or System)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HStack {
+                        Picker("Voice", selection: $state.editingBotVoice) {
+                            ForEach(HeyGenTTSCatalog.voices) { v in
+                                Text(v.label).tag(v.id)
+                            }
+                        }
+                        .labelsHidden()
+                        Button("Preview") {
+                            state.previewVoice(state.editingBotVoice, botName: state.editingBotName)
+                        }
+                    }
+                }
+
                 HStack {
                     if !state.editingBotId.isEmpty {
                         Button(role: .destructive) {
@@ -387,7 +433,8 @@ struct ContentView: View {
                         state.updateBot(
                             id: state.editingBotId,
                             name: state.editingBotName,
-                            instructions: state.editingBotInstructions
+                            instructions: state.editingBotInstructions,
+                            voice: state.editingBotVoice
                         )
                         state.showEditPersonaModal = false
                     }
@@ -501,8 +548,10 @@ struct ChatView: View {
                         .foregroundColor(.primary)
 
                     if let task=state.controlTask {Button("Stop action"){task.cancel()}}
-                    if state.isBusy {
+                    if state.isBusy || state.statusMessage != "Ready" {
                         Text(state.statusMessage)
+                            .lineLimit(2)
+                            .help(state.statusMessage)
                             .font(.system(size: 12))
                             .foregroundColor(WhatsAppTheme.emerald)
                     } else if state.isGroupSelected {
@@ -520,7 +569,7 @@ struct ChatView: View {
                         .buttonStyle(.plain)
                         .help("Manage Group Members")
                     } else {
-                        Text("online")
+                        Text(state.model.isEmpty ? "Hermes default" : state.model)
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
@@ -605,6 +654,15 @@ struct ChatView: View {
                     TextField("Model override", text: $state.model)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 150)
+
+                    if !state.isGroupSelected {
+                        Picker("Voice", selection: $state.currentBotVoice) {
+                            ForEach(HeyGenTTSCatalog.voices) { v in
+                                Text(v.label).tag(v.id)
+                            }
+                        }
+                        .frame(maxWidth: 165)
+                    }
 
                     if !state.availableMics.isEmpty {
                         Picker("Mic", selection: $state.selectedMic) {

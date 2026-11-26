@@ -8,6 +8,8 @@
 	<string>local.friday.assistant</string>
 	<key>CFBundleName</key>
 	<string>Friday</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>NSAppleEventsUsageDescription</key>
