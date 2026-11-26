@@ -1,7 +1,7 @@
 import SwiftUI
 import FridayCore
 
-private enum DesktopTheme {
+enum DesktopTheme {
     static func canvas(for scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.051, green: 0.067, blue: 0.090) : .white
     }
@@ -219,6 +219,7 @@ struct ContentView: View {
                         workspaceLink("Memory Vault", icon: "brain.head.profile", tab: 1)
                         workspaceLink("Reminders & Tasks", icon: "clock.badge.checkmark", tab: 2)
                         workspaceLink("Tools & workspaces", icon: "wrench.and.screwdriver", tab: 3)
+                        workspaceLink("Settings", icon: "gearshape", tab: 4)
                     }
                 }
                 .listStyle(.sidebar)
@@ -231,6 +232,7 @@ struct ContentView: View {
         } detail: {
             Group {
                 switch state.selectedTab {
+                case 4: SettingsWorkspace()
                 case 3: ToolsWorkspace()
                 case 1:
                     MemoryView()
@@ -244,7 +246,7 @@ struct ContentView: View {
         .onAppear {
             if !setupVisited {
                 setupVisited = true
-                state.selectedTab = 3
+                state.selectedTab = 4
             }
         }
         .sheet(isPresented: $state.showScreenPermissionHelp) {
@@ -640,30 +642,12 @@ struct ChatView: View {
             .background(DesktopTheme.sidebar(for: colorScheme))
 
             if showSettingsBar {
-                HStack(spacing: 12) {
-                    TextField("Provider override", text: $state.provider)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 160)
-                    TextField("Model override", text: $state.model)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 150)
-
-                    if !state.isGroupSelected {
-                        Picker("Voice", selection: $state.currentBotVoice) {
-                            ForEach(HeyGenTTSCatalog.voices) { v in
-                                Text(v.label).tag(v.id)
-                            }
-                        }
-                        .frame(maxWidth: 165)
-
-                        Picker("Role", selection: $state.currentBotRole) {
-                            ForEach(BotRolePreset.allCases) { r in
-                                Text(r.displayName).tag(r)
-                            }
-                        }
-                        .frame(maxWidth: 155)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Conversation settings").font(.headline)
+                        Spacer()
+                        Button("All settings") { state.selectedTab = 4 }
                     }
-
                     if !state.availableMics.isEmpty {
                         Picker("Mic", selection: $state.selectedMic) {
                             ForEach(state.availableMics, id: \.self) { mic in
@@ -673,17 +657,7 @@ struct ChatView: View {
                         .frame(maxWidth: 140)
                     }
 
-                    if NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") != nil {
-                        Button("Wispr Flow"){
-                            state.isWakeEnabled=false
-                            if let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") {
-                                let config=NSWorkspace.OpenConfiguration();config.activates=false
-                                NSWorkspace.shared.openApplication(at:url,configuration:config){_,_ in}
-                            }
-                            composerFocusTrigger += 1
-                            state.statusMessage="Use your Flow dictation shortcut, then review the message."
-                        }
-                    }
+                    HStack(spacing: 14) {
                     Toggle("Hey Friday", isOn: $state.isWakeEnabled)
                         .toggleStyle(.switch)
 
@@ -698,6 +672,19 @@ struct ChatView: View {
                         Image(systemName: "stop.circle.fill")
                     }
                     .help("Stop Current Speech")
+                    }
+                    if NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") != nil {
+                        Button("Wispr Flow"){
+                            state.isWakeEnabled=false
+                            if let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.electron.wispr-flow") {
+                                let config=NSWorkspace.OpenConfiguration();config.activates=false
+                                NSWorkspace.shared.openApplication(at:url,configuration:config){_,_ in}
+                            }
+                            composerFocusTrigger += 1
+                            state.statusMessage="Use your Flow dictation shortcut, then review the message."
+                        }
+                    }
+
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -1735,50 +1722,33 @@ struct MemoryCardRow: View {
     let entry: MemoryEntry
     let onDelete: () -> Void
 
+    @ViewBuilder private var metadata: some View {
+        Text(entry.scope == "shared" ? "Shared" : (entry.scope.hasPrefix("group:") ? "Group" : "Private"))
+            .help(entry.scope)
+        Text(MemoryOrigin.decode(entry.source) == nil ? entry.source : "Chat turn")
+        Text(entry.createdAt.formatted(date: .abbreviated, time: .omitted))
+        if let similarity = entry.similarity { Text(String(format: "Match %.2f", similarity)) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(entry.scope.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(entry.scope == "shared" ? DesktopTheme.accent : .blue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background((entry.scope == "shared" ? DesktopTheme.accent : Color.blue).opacity(0.15))
-                    .cornerRadius(4)
-
-                Text(MemoryOrigin.decode(entry.source) == nil ? entry.source : "Chat turn")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                if let sim = entry.similarity {
-                    Text(String(format: "Cosine: %.2f", sim))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                if MemoryOrigin.decode(entry.source) != nil {
-                    Button("Source") {state.showOrigin(entry.source)}
-                }
-                Button("Edit") {bodyDraft=entry.body;audience=entry.scope;error="";editing=true}
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundColor(.red.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .help("Delete this memory permanently")
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.body).font(.body).textSelection(.enabled)
+                ViewThatFits(in: .horizontal) {
+                    HStack { metadata }
+                    VStack(alignment: .leading) { metadata }
+                }.font(.caption).foregroundStyle(.secondary)
             }
-
-            Text(entry.body)
-                .font(.system(size: 13))
-                .foregroundColor(.primary)
-                .textSelection(.enabled)
+            Spacer(minLength: 4)
+            Menu {
+                Button("Edit fact…") { bodyDraft = entry.body; audience = entry.scope; error = ""; editing = true }
+                if MemoryOrigin.decode(entry.source) != nil {
+                    Button("Open source turn") { state.showOrigin(entry.source) }
+                }
+                Divider()
+                Button("Delete fact", role: .destructive, action: onDelete)
+            } label: { Image(systemName: "ellipsis.circle") }
+            .fixedSize().menuStyle(.borderlessButton).accessibilityLabel("Fact actions")
         }
         .sheet(isPresented:$editing) {
             VStack(alignment:.leading) {
@@ -1868,160 +1838,68 @@ struct MemoryView: View {
     @State private var searchQuery = ""
     @State private var newMemoryText = ""
     @State private var isShared = false
-    @State private var selectedTab: Int = 0
+    @State private var section = "Facts"
     @State private var showClearAlert = false
+    @State private var adding = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Memory Vault")
-                        .font(.system(size: 20, weight: .bold))
-                    Text("Long-Term Memory: Hybrid FTS5 + Apple Accelerate Vectors + GraphRAG Triples")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Button(role: .destructive) {
-                    showClearAlert = true
-                } label: {
-                    Label("Clear Memories", systemImage: "trash")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .disabled(state.memories.isEmpty && state.graphTriples.isEmpty)
-                .help("Clear memories for current scope")
-            }
-
-            // Scope Filter & Category Tabs
-            HStack(spacing: 12) {
-                Picker("Scope", selection: $state.selectedMemoryScope) {
-                    Text("All Scopes").tag("all")
-                    Text("Shared Only").tag("shared")
-                    Text("Current Chat").tag("current")
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
-                .onChange(of: state.selectedMemoryScope) { _, _ in
-                    state.loadMemories(query: searchQuery)
-                }
-
-                Spacer()
-
-                Picker("", selection: $selectedTab) {
-                    Text("Durable Facts (\(state.memories.count))").tag(0)
-                    Text("Knowledge Triples (\(state.graphTriples.count))").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
-            }
-
-            // Live Search Bar
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search memories using keywords, semantic questions, or entities…", text: $searchQuery)
-                    .textFieldStyle(.plain)
-                    .onChange(of: searchQuery) { _, query in
-                        state.loadMemories(query: query)
-                    }
-                if !searchQuery.isEmpty {
-                    Button {
-                        searchQuery = ""
-                        state.loadMemories(query: "")
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(DesktopTheme.field(for: colorScheme))
-            .cornerRadius(8)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
-
-            // Add Memory Bar
-            HStack(spacing: 10) {
-                Image(systemName: "plus.circle")
-                    .foregroundColor(DesktopTheme.accent)
-                TextField("Add new durable fact or preference…", text: $newMemoryText)
-                    .textFieldStyle(.plain)
-                    .onSubmit {
-                        saveNewMemory()
-                    }
-                Toggle("Shared", isOn: $isShared)
-                    .toggleStyle(.checkbox)
-                    .help("Shared makes this fact available to all bots")
-                Button("Save Fact") {
-                    saveNewMemory()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(DesktopTheme.accent)
-                .disabled(newMemoryText.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.06))
-            .cornerRadius(8)
-
-            Divider()
-
-            // Main Content Area
-            if selectedTab == 0 {
-                if state.memories.isEmpty {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Image(systemName: "brain")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary)
-                        Text(searchQuery.isEmpty ? "No memories stored for this scope." : "No memories matching '\(searchQuery)'.")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        ForEach(state.memories) { item in
-                            MemoryCardRow(entry: item) {
-                                state.deleteMemory(item)
-                            }
-                        }
-                    }
-                    .listStyle(.inset)
-                }
+        WorkspacePage(title: "Memory Vault", selection: $section, sections: ["Facts", "Relationships", "Documents"]) {
+            if section == "Documents" {
+                DocumentImport()
             } else {
-                if state.graphTriples.isEmpty {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary)
-                        Text("No relational knowledge graph facts found for this scope.")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
-                        Spacer()
+                HStack {
+                    Picker("Audience", selection: $state.selectedMemoryScope) {
+                        Text("All scopes").tag("all")
+                        Text("Shared").tag("shared")
+                        Text("Current chat").tag("current")
+                    }.fixedSize()
+                    Spacer()
+                    if section == "Facts" {
+                        Button { adding.toggle() } label: { Label("Add fact", systemImage: "plus") }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        ForEach(state.graphTriples) { triple in
-                            GraphTripleCardRow(triple: triple) {
-                                state.deleteTriple(triple)
-                            }
+                    Menu {
+                        Button("Clear selected scope…", role: .destructive) { showClearAlert = true }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).fixedSize().help("Memory actions")
+                }
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search facts and relationships", text: $searchQuery).textFieldStyle(.plain)
+                    if !searchQuery.isEmpty { Button { searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
+                }.padding(9).background(DesktopTheme.sidebar(for: colorScheme), in: RoundedRectangle(cornerRadius: 8))
+                if adding && section == "Facts" {
+                    VStack(alignment: .leading) {
+                        TextField("Fact or preference", text: $newMemoryText).onSubmit(saveNewMemory)
+                        HStack {
+                            Toggle("Share with every bot", isOn: $isShared)
+                            Spacer()
+                            Button("Cancel") { adding = false }
+                            Button("Save", action: saveNewMemory).disabled(newMemoryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                    .listStyle(.inset)
+                }
+                Divider()
+                if section == "Facts" {
+                    if state.memories.isEmpty { Text(searchQuery.isEmpty ? "No saved facts in this scope." : "No matching facts.").foregroundStyle(.secondary) }
+                    LazyVStack(alignment: .leading) {
+                        ForEach(state.memories) { item in
+                            MemoryCardRow(entry: item) { state.deleteMemory(item) }
+                            Divider()
+                        }
+                    }
+                } else {
+                    if state.graphTriples.isEmpty { Text("No matching relationships.").foregroundStyle(.secondary) }
+                    LazyVStack(alignment: .leading) {
+                        ForEach(state.graphTriples) { triple in
+                            GraphTripleCardRow(triple: triple) { state.deleteTriple(triple) }
+                            Divider()
+                        }
+                    }
                 }
             }
         }
-        .padding(16)
+        .onChange(of: searchQuery) { state.loadMemories(query: searchQuery) }
+        .onChange(of: state.selectedMemoryScope) { state.loadMemories(query: searchQuery) }
         .onAppear {
             state.loadMemories(query: searchQuery)
         }
@@ -2044,6 +1922,7 @@ struct MemoryView: View {
         guard !clean.isEmpty else { return }
         state.saveMemory(body: clean, isShared: isShared)
         newMemoryText = ""
+        adding = false
     }
 }
 
@@ -2053,51 +1932,62 @@ struct RemindersView: View {
     @State private var due = Date().addingTimeInterval(3600)
     @State private var frequency: Frequency? = nil
 
+    @State private var section = "Scheduled"
+    @State private var adding = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Automated Reminders & Activities")
-                .font(.headline)
-
-            HStack {
-                TextField("Reminder or document title", text: $reminderText)
-                    .textFieldStyle(.roundedBorder)
-                DatePicker("", selection: $due)
-                Picker("Repeat", selection: $frequency) {
-                    Text("Once").tag(nil as Frequency?)
-                    Text("Daily").tag(Frequency.daily as Frequency?)
-                    Text("Weekly").tag(Frequency.weekly as Frequency?)
-                }
-                .frame(width: 100)
-                Button("Schedule") {
-                    if !reminderText.isEmpty {
-                        state.addReminder(text: reminderText, due: due, frequency: frequency)
-                        reminderText = ""
+        WorkspacePage(title: "Reminders & Tasks", selection: $section, sections: ["Scheduled", "Activity", "Briefings", "Apple Reminders"]) {
+            switch section {
+            case "Briefings": LocalTools(isBackup: false)
+            case "Apple Reminders": AppleReminderForm()
+            case "Activity":
+                if state.activities.isEmpty { Text("No recorded activity yet.").foregroundStyle(.secondary) }
+                ForEach(state.activities) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.subject)
+                        Text(item.action + " · " + item.date.formatted()).font(.caption).foregroundStyle(.secondary)
+                        if let error = item.error { Text(error).foregroundStyle(.red) }
                     }
+                    Divider()
                 }
-            }
-
-            List(state.reminders) { rem in
+            default:
                 HStack {
-                    VStack(alignment: .leading) {
-                        Text(rem.text).font(.body)
-                        Text(rem.due.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    Text("Upcoming").font(.headline)
                     Spacer()
-                    if let freq = rem.frequency {
-                        Text(freq.rawValue)
-                            .font(.caption)
-                            .padding(4)
-                            .background(Color.blue.opacity(0.1))
-                            .cornerRadius(4)
+                    Button { adding.toggle() } label: { Label("New reminder", systemImage: "plus") }
+                }
+                if adding {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("Reminder title", text: $reminderText).textFieldStyle(.roundedBorder)
+                        DatePicker("Due", selection: $due)
+                        Picker("Repeat", selection: $frequency) {
+                            Text("Once").tag(nil as Frequency?)
+                            Text("Daily").tag(Frequency.daily as Frequency?)
+                            Text("Weekly").tag(Frequency.weekly as Frequency?)
+                        }
+                        HStack {
+                            Button("Cancel") { adding = false }
+                            Button("Schedule") {
+                                state.addReminder(text: reminderText, due: due, frequency: frequency)
+                                reminderText = ""
+                                adding = false
+                            }.disabled(reminderText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
                     }
                 }
+                Divider()
+                if state.reminders.isEmpty { Text("No scheduled reminders.").foregroundStyle(.secondary) }
+                ForEach(state.reminders.sorted { $0.due < $1.due }) { reminder in
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(reminder.text)
+                            Text([reminder.due.formatted(), reminder.frequency?.rawValue].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: { Image(systemName: "clock").foregroundStyle(DesktopTheme.accent) }
+                    Divider()
+                }
             }
-        }
-        .padding()
-        .onAppear {
-            state.loadReminders()
-        }
+        }.onAppear { state.loadReminders() }
     }
 }

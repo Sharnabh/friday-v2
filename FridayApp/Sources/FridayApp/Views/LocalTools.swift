@@ -3,10 +3,12 @@ import FridayCore
 import EventKit
 
 struct LocalTools:View {
+    let isBackup: Bool
     @AppStorage("briefing.hour") private var hour=9
     @AppStorage("briefing.watch") private var watch=""
     @State private var status=""
     var body:some View {
+        if !isBackup {
         GroupBox("Calendar briefing") {
             VStack(alignment:.leading){
                 Stepper("Daily at \(hour):00",value:$hour,in:0...23)
@@ -29,7 +31,8 @@ struct LocalTools:View {
                 }
             }
         }
-        GroupBox("Installation & backup"){
+        } else {
+        GroupBox("Backup and restore"){
             HStack {
                 Button("Back up"){let panel=NSSavePanel();panel.nameFieldStringValue="Friday Backup";if panel.runModal() == .OK,let url=panel.url {helper("archive",["save",url.path],"Backup saved.")}}
                 Button("Restore…"){let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false
@@ -39,6 +42,7 @@ struct LocalTools:View {
                     }
                 }
             }
+        }
         }
         if !status.isEmpty {Text(status).textSelection(.enabled)}
     }
