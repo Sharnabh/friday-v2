@@ -6,6 +6,7 @@ bin=$(swift build -c release --show-bin-path)
 app=${1:-../outputs/Friday.app}
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Scripts/Info.plist "$app/Contents/Info.plist"
+cp Scripts/Friday.icns "$app/Contents/Resources/"
 cp Sources/FridayCore/Resources/*.py Sources/FridayCore/Resources/*.js "$app/Contents/Resources/"
 voice_dir=${FRIDAY_WHISPER_DIR:-"$HOME/.hermes/tools/friday-whisper"}
 if [ -x "$voice_dir/whisper-cli" ] && [ -f "$voice_dir/ggml-small.en.bin" ] && [ -f "$voice_dir/ggml-base.bin" ]; then

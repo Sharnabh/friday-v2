@@ -4,14 +4,16 @@
 <dict>
 	<key>CFBundleExecutable</key>
 	<string>Friday</string>
+	<key>CFBundleIconFile</key>
+	<string>Friday.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.friday.assistant</string>
 	<key>CFBundleName</key>
 	<string>Friday</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Read your selected Mail message and prepare a reply draft for review.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
