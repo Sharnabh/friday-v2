@@ -84,6 +84,7 @@ final class RegressionTests: XCTestCase {
     }
 
     func testHeyGenPCMConversionAndSampleRateParsing() {
+        XCTAssertEqual(HeyGenTTSCatalog.defaultModel, "heygen/heygen-voice-1-turbo:free")
         XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: nil), 44100)
         XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: "audio/pcm;rate=24000"), 24000)
         XCTAssertEqual(AssistantService.parseOpenRouterSampleRate(contentType: "audio/pcm; rate=44100"), 44100)

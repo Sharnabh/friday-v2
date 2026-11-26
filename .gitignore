@@ -32,3 +32,6 @@ work/friday-whisper-src/
 
 # Temporary/scratch build artifacts
 /Users/user/Library/
+
+# Generated Python bytecode
+__pycache__/

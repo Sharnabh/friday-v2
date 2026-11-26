@@ -191,9 +191,30 @@ public final class BackgroundFactExtractor: @unchecked Sendable {
         source: String = "Autonomous Extractor",
         store: HybridMemoryStore,
         provider: String,
-        model: String
+        model: String,
+        usePerplexityDecider: Bool = false,
+        embeddingMode: MemoryEmbeddingMode = .localOnly,
+        openRouterClient: OpenRouterClient = .shared
     ) {
         Task.detached(priority: .utility) {
+            if usePerplexityDecider, AssistantService.hasOpenRouterAPIKey() {
+                let gateQuestion: [String: Any] = [
+                    "type": "noul",
+                    "instructions": "Does the user's message state an enduring personal fact (name, job, location, preference, persistent stack) worth saving to long-term memory?",
+                    "criteria": [
+                        "true": "Contains a durable personal fact explicitly stated by the user.",
+                        "false": "Greeting, command, question, banter, or roleplay without durable personal facts."
+                    ]
+                ]
+                if let (answers, _) = try? await openRouterClient.decide(
+                    fast: true,
+                    state: ["user_message": userPrompt],
+                    questions: ["is_durable_user_fact": gateQuestion]
+                ), let ans = answers["is_durable_user_fact"], ans.decision == false, ans.confidence >= 0.70 {
+                    return
+                }
+            }
+
             let prompt = """
             [TASK: INDUSTRY-STANDARD EPHEMERAL GATE & USER PROFILE MEMORY EXTRACTOR]
             You are the long-term memory extraction engine for an AI assistant (like ChatGPT Memory or Gemini Saved Info).
@@ -221,10 +242,11 @@ public final class BackgroundFactExtractor: @unchecked Sendable {
             """
 
             do {
+                let eff = MultiModelRouter.effectiveProviderAndModel(for: .fastChat, botProvider: provider, botModel: model)
                 let hermes = NSHomeDirectory() + "/.local/bin/hermes"
                 var args = ["chat", "--quiet", "--reasoning", "none", "--ignore-rules"]
-                if !provider.isEmpty { args += ["--provider", provider] }
-                if !model.isEmpty { args += ["--model", model] }
+                if !eff.provider.isEmpty { args += ["--provider", eff.provider] }
+                if !eff.model.isEmpty { args += ["--model", eff.model] }
                 args += ["-q", prompt]
 
                 let result = try ProcessRunner.run(hermes, args)
@@ -247,6 +269,14 @@ public final class BackgroundFactExtractor: @unchecked Sendable {
                     guard Self.isValidDurableFact(factText) else { continue }
 
                     try store.save(factText, scope: scope, source: source, importance: imp, original: nil)
+                    if embeddingMode == .cloudAll {
+                        await HybridMemoryCloudHelper.attachCloudEmbeddingToMemoryIfSaved(
+                            store: store,
+                            scope: scope,
+                            body: factText,
+                            client: openRouterClient
+                        )
+                    }
                     WorkingMemoryCache.shared.invalidate(scope: scope)
                     Self.shared.onFactSaved?(factText)
                 }

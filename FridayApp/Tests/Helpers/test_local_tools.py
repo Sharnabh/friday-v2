@@ -42,11 +42,18 @@ class LocalTools(unittest.TestCase):
                     db.execute("insert into memories values('shared','fixture','test',1)")
                 subprocess.run(["defaults","write",backup.DOMAIN,"bot","alpha"],check=True)
                 subprocess.run(["defaults","write",backup.DOMAIN,"friday.openrouterApiKey","fixture-only"],check=True)
+                images = backup.DB.parent / "generated-images"
+                backup.IMAGES = images
+                images.mkdir()
+                asset = images / (str(uuid4()) + ".png")
+                asset.write_bytes(b"fixture")
                 backup.save(folder)
+                asset.unlink()
                 self.assertNotIn("friday.openrouterApiKey",backup.plistlib.loads((folder/"settings.plist").read_bytes()))
                 with sqlite3.connect(backup.DB) as db:db.execute("delete from memories")
                 subprocess.run(["defaults","write",backup.DOMAIN,"bot","beta"],check=True)
                 backup.restore(folder)
+                self.assertEqual(asset.read_bytes(), b"fixture")
                 self.assertEqual(subprocess.check_output(["defaults","read",backup.DOMAIN,"bot"],text=True).strip(),"alpha")
                 with sqlite3.connect(backup.DB) as db:self.assertEqual(db.execute("select body from memories").fetchone()[0],"fixture")
         finally:subprocess.run(["defaults","delete",backup.DOMAIN],capture_output=True)

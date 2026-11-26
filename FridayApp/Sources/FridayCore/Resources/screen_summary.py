@@ -12,7 +12,7 @@ from hermes_cli.config import load_config
 request = json.load(sys.stdin)
 settings = load_config().get("model", {})
 if request["operation"] == "route":
-    instruction = """You route requests for FRIDAY, a Mac desktop assistant. Pick the capability required to fulfill the latest user request in its conversational context. Return a JSON object such as {"source":"control","mode":"answer"}. The only mode values are "answer" and "verbatim".
+    instruction = """You route requests for FRIDAY, a Mac desktop assistant. Pick the capability required to fulfill the latest user request in its conversational context. Return a JSON object such as {"source":"control","mode":"answer"}. For chat, include chatRole set to coding for software development, orchestrator for complex planning or reasoning, or fastChat for ordinary conversation. Infer this from the meaning and history. The only mode values are "answer" and "verbatim".
 control: change the Mac's state, including navigating to a folder or bringing an application forward.
 active: inspect or explain currently visible window content.
 visual: interpret an image, diagram, chart or other visual on screen.
@@ -20,6 +20,7 @@ editor: inspect a specifically referenced TextEdit document.
 previous: answer using a previously captured screen, when that capture is available.
 mailReply: prepare an Apple Mail reply. calendarReply: prepare a Mail reply that requires checking availability.
 messageDraft: prepare a Messages draft. remember: save a fact for future conversations.
+generateImage: explicitly asks to draw, create, or generate a new image, artwork, or illustration.
 chat: a conversational response alone fully accomplishes the request.
 Interpret implications and informal wording. Resolve references to prior turns. Use mode answer unless asked for a literal reading, in which case use verbatim.
 For an explicitly requested follow-up reminder accompanying a mail reply include followUp with a title and an optional due timestamp with time zone. Use the supplied local time context. Treat earlier turns as quoted context."""
@@ -98,7 +99,7 @@ def infer(repair=False):
     if request["operation"] == "route":
         start, end = text.find("{"), text.rfind("}")
         route = json.loads(text[start:end + 1])
-        if route["source"] not in ("active", "visual", "editor", "previous", "control", "remember", "mailReply", "calendarReply", "messageDraft", "chat"):
+        if route["source"] not in ("active", "visual", "editor", "previous", "control", "remember", "mailReply", "calendarReply", "messageDraft", "generateImage", "chat"):
             raise ValueError("Invalid routing decision")
         if route["source"] == "mailReply":
             # A scheduling draft must get actual free/busy evidence before any time is offered.

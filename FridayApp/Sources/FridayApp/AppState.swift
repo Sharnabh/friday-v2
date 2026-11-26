@@ -59,13 +59,34 @@ public final class AppState: ObservableObject {
     
     // Voice & Wake Word
     @Published public var isVoiceActive: Bool = false
+    @Published public var isTTSEnabled: Bool = true {
+        didSet {
+            guard !loadingVoiceSettings else { return }
+            if isWakeEnabled && !isTTSEnabled {
+                isTTSEnabled = true
+                return
+            }
+            defaults.set(isTTSEnabled, forKey: "friday.isTTSEnabled")
+            AssistantService.shared.setMuted(!isTTSEnabled)
+        }
+    }
     @Published public var isWakeEnabled: Bool = false {
         didSet {
-            guard oldValue != isWakeEnabled else {return}
+            guard oldValue != isWakeEnabled else { return }
             if isWakeEnabled {
-                if VoiceService.shared.isActive {VoiceService.shared.stopCapture()}
+                if !isTTSEnabled {
+                    isTTSEnabled = true
+                } else {
+                    AssistantService.shared.setMuted(false)
+                }
+                guard servicesEnabled else { return }
+                if VoiceService.shared.isActive { VoiceService.shared.stopCapture() }
                 armWakeIfReady()
-            } else {VoiceService.shared.stopCapture(); isVoiceActive = false}
+            } else {
+                guard servicesEnabled else { return }
+                VoiceService.shared.stopCapture()
+                isVoiceActive = false
+            }
         }
     }
     @Published public var audioLevel: Double = 0.0
@@ -74,7 +95,7 @@ public final class AppState: ObservableObject {
         didSet {
             guard selectedMic != oldValue else { return }
             defaults.set(selectedMic, forKey: "fridayMic")
-            if isWakeEnabled {
+            if isWakeEnabled, servicesEnabled {
                 VoiceService.shared.stopCapture()
                 armWakeIfReady()
             }
@@ -113,8 +134,27 @@ public final class AppState: ObservableObject {
     @Published public var editingBotName: String = ""
     @Published public var editingBotInstructions: String = ""
     @Published public var editingBotVoice: String = ""
+    @Published public var editingBotRole: BotRolePreset = .auto
     @Published public var openRouterAPIKey = ""
     @Published public private(set) var speechCredentialStatus = ""
+
+    // Multi-Model Orchestration & Opt-In Capabilities
+    @Published public var isDeciderRoutingEnabled: Bool = false {
+        didSet { if !loadingMultiModelSettings { defaults.set(isDeciderRoutingEnabled, forKey: "friday.optIn.perplexityDecider") } }
+    }
+    @Published public var memoryEmbeddingMode: MemoryEmbeddingMode = .localOnly {
+        didSet { if !loadingMultiModelSettings { defaults.set(memoryEmbeddingMode.rawValue, forKey: "friday.optIn.embeddingMode") } }
+    }
+    @Published public var isCloudRerankEnabled: Bool = false {
+        didSet { if !loadingMultiModelSettings { defaults.set(isCloudRerankEnabled, forKey: "friday.optIn.cloudRerank") } }
+    }
+    @Published public var hasOpenRouterCredits: Bool = false {
+        didSet { if !loadingMultiModelSettings { defaults.set(hasOpenRouterCredits, forKey: "friday.openrouter.hasCredits") } }
+    }
+    @Published public private(set) var dailyFreeRequests: Int = 0
+    @Published public private(set) var openRouterCatalogModels: [OpenRouterModelDescriptor] = []
+    @Published public var openRouterRefreshStatus: String = ""
+    private var loadingMultiModelSettings = false
 
     public func saveSpeechCredential(remove: Bool = false) {
         do {
@@ -152,6 +192,7 @@ public final class AppState: ObservableObject {
     public var activityService: ActivityService
 
     private let defaults:UserDefaults
+    private let servicesEnabled: Bool
     private var activeStream: StreamChunkBuffer?
     private var reminderTimer: Timer?
 
@@ -159,6 +200,7 @@ public final class AppState: ObservableObject {
                 appSupport:URL = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0],
                 startServices:Bool = true) {
         self.defaults=defaults
+        self.servicesEnabled = startServices
         let dbUrl = appSupport.appendingPathComponent("Friday/Memory.sqlite")
         let reminderFile = appSupport.appendingPathComponent("FRIDAY/reminders.json")
         let activityFolder = appSupport.appendingPathComponent("FRIDAY/activity")
@@ -189,7 +231,22 @@ public final class AppState: ObservableObject {
         }
         let savedTTSModel = defaults.string(forKey: "friday.openrouterTTSModel") ?? ""
         self.openRouterTTSModel = savedTTSModel.isEmpty ? HeyGenTTSCatalog.defaultModel : savedTTSModel
+        let savedTTSEnabled = defaults.object(forKey: "friday.isTTSEnabled") as? Bool ?? true
+        self.isTTSEnabled = savedTTSEnabled
         loadingVoiceSettings = false
+        if startServices {
+            AssistantService.shared.setMuted(!savedTTSEnabled)
+        }
+
+        loadingMultiModelSettings = true
+        self.isDeciderRoutingEnabled = defaults.bool(forKey: "friday.optIn.perplexityDecider")
+        let savedEmbed = defaults.string(forKey: "friday.optIn.embeddingMode") ?? ""
+        self.memoryEmbeddingMode = MemoryEmbeddingMode(rawValue: savedEmbed) ?? .localOnly
+        self.isCloudRerankEnabled = defaults.bool(forKey: "friday.optIn.cloudRerank")
+        self.hasOpenRouterCredits = defaults.bool(forKey: "friday.openrouter.hasCredits")
+        loadingMultiModelSettings = false
+        self.dailyFreeRequests = OpenRouterModelRegistry.shared.todayFreeRequestCount()
+        self.openRouterCatalogModels = OpenRouterModelRegistry.shared.allModels()
 
         AssistantService.shared.onSpeechError = { [weak self] message in
             Task { @MainActor in self?.statusMessage = message }
@@ -198,7 +255,11 @@ public final class AppState: ObservableObject {
         loadBotsAndGroups()
         loadTranscripts()
         loadReminders()
-        if startServices {setupVoicePipeline();startReminderPoller()}
+        if startServices {
+            setupVoicePipeline()
+            startReminderPoller()
+            Task { try? await self.refreshOpenRouterCatalog(force: false) }
+        }
     }
 
     public var activeBotScope: String {
@@ -279,7 +340,8 @@ public final class AppState: ObservableObject {
                     id: $0.key,
                     name: $0.value["name"] ?? "Bot",
                     instructions: $0.value["instructions"] ?? "",
-                    voice: $0.value["voice"] ?? ""
+                    voice: $0.value["voice"] ?? "",
+                    role: BotRolePreset(rawValue: $0.value["role"] ?? "") ?? .auto
                 )
             }.sorted(by: { $0.name < $1.name })
         }
@@ -351,6 +413,46 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public var fridayRole: BotRolePreset {
+        BotRolePreset(rawValue: defaults.string(forKey: "fridayCustomRole") ?? "") ?? .auto
+    }
+
+    public func botRole(for id: String) -> BotRolePreset {
+        if id.isEmpty { return fridayRole }
+        return bots.first(where: { $0.id == id })?.role ?? .auto
+    }
+
+    public var currentBotRole: BotRolePreset {
+        get { isGroupSelected ? .orchestrator : botRole(for: activeBotId) }
+        set { setRoleForBot(id: activeBotId, role: newValue) }
+    }
+
+    public func setRoleForBot(id: String, role: BotRolePreset) {
+        if id.isEmpty {
+            defaults.set(role.rawValue, forKey: "fridayCustomRole")
+            objectWillChange.send()
+        } else {
+            var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
+            var entry = current[id] ?? [:]
+            entry["role"] = role.rawValue
+            current[id] = entry
+            defaults.set(current, forKey: "fridayBots")
+            loadBotsAndGroups()
+        }
+    }
+
+    public func refreshOpenRouterCatalog(force: Bool = false) async throws {
+        openRouterRefreshStatus = "Syncing OpenRouter models…"
+        let list = try await OpenRouterModelRegistry.shared.refreshIfNeeded(force: force)
+        self.openRouterCatalogModels = list
+        let freeCount = list.filter(\.isFree).count
+        self.openRouterRefreshStatus = "Synced \(list.count) models (\(freeCount) free)."
+    }
+
+    public func syncQuotaCount() {
+        self.dailyFreeRequests = OpenRouterModelRegistry.shared.todayFreeRequestCount()
+    }
+
     public func previewVoice(_ voice: String, botName: String) {
         let name = botName.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = HeyGenTTSCatalog.voices.first(where: { $0.id == voice })?.label ?? voice
@@ -383,7 +485,7 @@ public final class AppState: ObservableObject {
         activeBotId = id
     }
 
-    public func updateBot(id: String, name: String, instructions: String, voice: String? = nil) {
+    public func updateBot(id: String, name: String, instructions: String, voice: String? = nil, role: BotRolePreset? = nil) {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if id.isEmpty {
             // Updating Core Friday
@@ -392,16 +494,21 @@ public final class AppState: ObservableObject {
             if let voice {
                 defaults.set(voice, forKey: "fridayCustomVoice")
             }
+            if let role {
+                defaults.set(role.rawValue, forKey: "fridayCustomRole")
+            }
             objectWillChange.send()
             self.statusMessage = "Updated \(fridayName) persona"
         } else {
             // Updating custom bot
             var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
             let existingVoice = current[id]?["voice"] ?? ""
+            let existingRole = current[id]?["role"] ?? BotRolePreset.auto.rawValue
             current[id] = [
                 "name": cleanName.isEmpty ? "Bot" : cleanName,
                 "instructions": instructions,
-                "voice": voice ?? existingVoice
+                "voice": voice ?? existingVoice,
+                "role": role?.rawValue ?? existingRole
             ]
             defaults.set(current, forKey: "fridayBots")
             loadBotsAndGroups()
@@ -419,12 +526,14 @@ public final class AppState: ObservableObject {
             editingBotName = fridayName
             editingBotInstructions = fridayInstructions
             editingBotVoice = fridayVoice
+            editingBotRole = fridayRole
             showEditPersonaModal = true
         } else if let b = bots.first(where: { $0.id == targetId }) {
             editingBotId = b.id
             editingBotName = b.name
             editingBotInstructions = b.instructions
             editingBotVoice = b.voice
+            editingBotRole = b.role
             showEditPersonaModal = true
         }
     }
@@ -563,10 +672,10 @@ public final class AppState: ObservableObject {
         self.currentTranscript = defaults.stringArray(forKey: key) ?? []
     }
 
-    public func createBot(name: String, instructions: String, voice: String = "") {
+    public func createBot(name: String, instructions: String, voice: String = "", role: BotRolePreset = .auto) {
         let id = UUID().uuidString
         var current = defaults.dictionary(forKey: "fridayBots") as? [String: [String: String]] ?? [:]
-        current[id] = ["name": name, "instructions": instructions, "voice": voice]
+        current[id] = ["name": name, "instructions": instructions, "voice": voice, "role": role.rawValue]
         defaults.set(current, forKey: "fridayBots")
         loadBotsAndGroups()
         selectBot(id)
@@ -758,14 +867,50 @@ public final class AppState: ObservableObject {
     public func saveMemory(body: String, isShared: Bool) {
         guard let store = memoryStore else { return }
         let scope = isShared ? "shared" : memoryScope
+        let mode = memoryEmbeddingMode
         do {
             try store.save(body, scope: scope, source: "User added", original: nil)
+            if mode == .cloudAll {
+                Task.detached(priority: .utility) {
+                    await HybridMemoryCloudHelper.attachCloudEmbeddingToMemoryIfSaved(
+                        store: store,
+                        scope: scope,
+                        body: body
+                    )
+                }
+            }
             loadMemories()
             notifyMemoryUpdated(text: body)
             self.statusMessage = "Memory saved to \(scope)."
         } catch {
             self.statusMessage = error.localizedDescription
         }
+    }
+
+    public func generateImage(prompt: String, aspectRatio: String = "", background: String = "") async throws -> OpenRouterGeneratedImage {
+        let generated = try await OpenRouterClient.shared.generateImage(
+            prompt: prompt,
+            aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
+            background: background.isEmpty ? nil : background
+        )
+        self.syncQuotaCount()
+        return generated
+    }
+
+    public func indexRAGDocument(title: String, body: String, mediaType: String = "text", sourcePath: String? = nil) async throws {
+        guard let store = memoryStore else { throw FridayError.message("Memory store unavailable.") }
+        let useCloud = memoryEmbeddingMode != .localOnly
+        _ = try await HybridMemoryCloudHelper.indexDocument(
+            store: store,
+            scope: memoryScope,
+            title: title,
+            body: body,
+            mediaType: mediaType,
+            sourcePath: sourcePath,
+            useCloudEmbedding: useCloud
+        )
+        self.syncQuotaCount()
+        self.statusMessage = "Indexed \(title) into knowledge base."
     }
 
     public func loadReminders() {
@@ -816,6 +961,9 @@ public final class AppState: ObservableObject {
                 let botInstr = currentBotInstructions
                 let activeProvider = provider
                 let activeModel = model
+                let useDecider = isDeciderRoutingEnabled
+                let embedMode = memoryEmbeddingMode
+                let useRerank = isCloudRerankEnabled
 
                 if let topic = ForgetRequest.topic(in:text), let store = self.memoryStore {
                     let (local, shared) = try await Task.detached(priority: .userInitiated) {
@@ -850,11 +998,15 @@ public final class AppState: ObservableObject {
                     return
                 }
 
-                // 1. Intelligent Route Decision
-                let decision = try await Task.detached(priority: .userInitiated) {
-                    try ScreenInferenceRouter.routeQuestion(text, history: history, hasPreviousCapture: previous != nil,
-                                                            provider: activeProvider, model: activeModel)
-                }.value
+                // 1. Intelligent Route Decision (Perplexity Decider when opted-in, else fast OpenRouter/Hermes router)
+                let decision = try await MultiModelRouter.routeQuestion(
+                    text,
+                    history: history,
+                    hasPreviousCapture: previous != nil,
+                    provider: activeProvider,
+                    model: activeModel,
+                    usePerplexityDecider: useDecider
+                )
 
                 // 2. Action or Chat Dispatch
                 var reply = ""
@@ -890,16 +1042,18 @@ public final class AppState: ObservableObject {
 
                 case .control:
                     statusMessage = "Operating Mac app…"
+                    let controlEff = MultiModelRouter.effectiveProviderAndModel(for: .coding, botProvider: activeProvider, botModel: activeModel)
+                    let visionEff = MultiModelRouter.effectiveProviderAndModel(for: .vision, botProvider: activeProvider, botModel: activeModel)
                     let worker=Task.detached(priority:.userInitiated) {
                         let request:[String:Any]=["operation":"control","question":text]
-                        let initial=try ScreenInferenceRouter.infer(request,provider:activeProvider,model:activeModel)
+                        let initial=try ScreenInferenceRouter.infer(request,provider:controlEff.provider,model:controlEff.model)
                         try Task.checkCancellation()
                         return try MacAutomationDriver.performMacPlan(initial,locate:{ image,description in
-                            let raw=try ScreenInferenceRouter.infer(["operation":"locate","image":image.path,"question":description],provider:activeProvider,model:activeModel)
+                            let raw=try ScreenInferenceRouter.infer(["operation":"locate","image":image.path,"question":description],provider:visionEff.provider,model:visionEff.model)
                             return try JSONDecoder().decode([String:Double].self,from:Data(raw.utf8))
                         }) { labels,completed,app in
                             var refined=request;refined["initialPlan"]=initial;refined["visibleControls"]=labels;refined["alreadyCompleted"]=completed;refined["currentApp"]=app
-                            let raw=try ScreenInferenceRouter.infer(refined,provider:activeProvider,model:activeModel)
+                            let raw=try ScreenInferenceRouter.infer(refined,provider:controlEff.provider,model:controlEff.model)
                             return try JSONDecoder().decode(MacPlan.self,from:Data(raw.utf8))
                         }
                     }
@@ -912,10 +1066,11 @@ public final class AppState: ObservableObject {
                         showScreenPermissionHelp = true
                         throw FridayError.message("Allow FRIDAY to capture the visible window in Screen Recording settings.")
                     }
+                    let visionEff = MultiModelRouter.effectiveProviderAndModel(for: .vision, botProvider: activeProvider, botModel: activeModel)
                     reply = try await Task.detached(priority: .userInitiated) {
                         let url = try DesktopTools.imageOfActiveWindow()
                         defer { try? FileManager.default.removeItem(at: url) }
-                        return try ScreenInferenceRouter.infer(["operation": "visual", "image": url.path, "question": text], provider: activeProvider, model: activeModel)
+                        return try ScreenInferenceRouter.infer(["operation": "visual", "image": url.path, "question": text], provider: visionEff.provider, model: visionEff.model)
                     }.value
                     defaults.set(reply,forKey:cacheKey)
                 case .active:
@@ -1015,14 +1170,16 @@ public final class AppState: ObservableObject {
                         reply = "No previous screen capture available for follow-up."
                     }
 
+                case .generateImage:
+                    self.statusMessage = "Generating image…"
+                    let generated = try await OpenRouterClient.shared.generateImage(prompt: text)
+                    reply = "[Image: \(generated.fileURL.lastPathComponent)]\nGenerated image using `\(generated.model)`."
+
                 case .chat:
-                    // 1. Working Memory & Identity Context Retrieval (off main thread)
+                    // 1. Working Memory, Cloud Multimodal RAG & Reranked Retrieval
                     var context = ""
                     let scope = self.memoryScope
-                    let cacheKey = scope + "::" + text
-                    if let cached = WorkingMemoryCache.shared.get(key: cacheKey) {
-                        context = cached.map { "[" + $0.scope + "] " + $0.body }.joined(separator: "\n")
-                    } else if let store = memoryStore {
+                    if let store = memoryStore {
                         context = await Task.detached(priority: .userInitiated) {
                             var contextLines = [String]()
                             let lowerText = text.lowercased()
@@ -1035,10 +1192,16 @@ public final class AppState: ObservableObject {
                                 contextLines.append("Relational facts: " + triples.map { $0.summary }.joined(separator: ", "))
                             }
                             let searchQuery = isIdentityQuery ? "user name" : text
-                            if let results = try? store.search(searchQuery, scope: scope, limit: 3) {
-                                WorkingMemoryCache.shared.set(key: cacheKey, entries: results)
-                                contextLines.append(contentsOf: results.map { "[" + $0.scope + "] " + $0.body })
-                            }
+                            let cloudRes = await HybridMemoryCloudHelper.retrieveContext(
+                                store: store,
+                                query: searchQuery,
+                                scope: scope,
+                                limit: 3,
+                                embeddingMode: embedMode,
+                                useCloudRerank: useRerank
+                            )
+                            contextLines.append(contentsOf: cloudRes.memories.map { "[" + $0.scope + "] " + $0.body })
+                            contextLines.append(contentsOf: cloudRes.ragSnippets)
                             return contextLines.joined(separator: "\n")
                         }.value
                     }
@@ -1090,11 +1253,13 @@ public final class AppState: ObservableObject {
                         self.currentTranscript = turns
 
                         let chatHistory = turns.dropLast().map { $0 }
+                        let chatRole = MultiModelRouter.classifyChatRole(botPreset: botRole(for: single.id), inferred: decision.chatRole.flatMap(ModelRole.init(rawValue:)))
+                        let effChat = MultiModelRouter.effectiveProviderAndModel(for: chatRole, botProvider: single.provider, botModel: single.model)
                         reply = try await AssistantService.shared.streamChat(
                             prompt: text,
                             history: chatHistory,
-                            provider: single.provider,
-                            model: single.model,
+                            provider: effChat.provider,
+                            model: effChat.model,
                             sessionID: sessionID,
                             contextMemory: context,
                             botName: single.name,
@@ -1166,10 +1331,12 @@ public final class AppState: ObservableObject {
                             \(contextTurns)
                             """
 
+                            let rawMemberRole = MultiModelRouter.classifyChatRole(botPreset: botRole(for: target.id), inferred: decision.chatRole.flatMap(ModelRole.init(rawValue:)))
+                            let effMember = MultiModelRouter.effectiveProviderAndModel(for: rawMemberRole, botProvider: target.provider, botModel: target.model)
                             let rawMemberReply = try await AssistantService.shared.executeRawChat(
                                 prompt: groupPrompt,
-                                provider: target.provider,
-                                model: target.model,
+                                provider: effMember.provider,
+                                model: effMember.model,
                                 onChunk: { chunk in
                                     streamBuffer.append(chunk) { snapshot in
                                         Task { @MainActor in
@@ -1216,9 +1383,12 @@ public final class AppState: ObservableObject {
                             source: origin,
                             store: store,
                             provider: self.provider,
-                            model: self.model
+                            model: self.model,
+                            usePerplexityDecider: useDecider,
+                            embeddingMode: embedMode
                         )
                     }
+                    self.syncQuotaCount()
                     return
                 }
 
@@ -1228,6 +1398,7 @@ public final class AppState: ObservableObject {
                     self.currentTranscript = turns
                     self.statusMessage = "Ready"
                     self.isBusy = false
+                    self.syncQuotaCount()
                     AssistantService.shared.speak(reply, voice: voiceForBot(id: activeBotId))
                 }
 

@@ -95,6 +95,7 @@ struct ContentView: View {
     @State private var newBotName = ""
     @State private var newBotInstructions = ""
     @State private var newBotVoice = ""
+    @State private var newBotRole: BotRolePreset = .auto
     @State private var newGroupName = ""
     @State private var selectedGroupMembers = Set<String>()
     @State private var searchChatQuery = ""
@@ -317,15 +318,21 @@ struct ContentView: View {
                         state.previewVoice(newBotVoice, botName: newBotName)
                     }
                 }
+                Picker("Task Role", selection: $newBotRole) {
+                    ForEach(BotRolePreset.allCases) { r in
+                        Text(r.displayName).tag(r)
+                    }
+                }
                 HStack {
                     Spacer()
                     Button("Cancel") { showCreateBot = false }
                     Button("Create") {
                         if !newBotName.isEmpty {
-                            state.createBot(name: newBotName, instructions: newBotInstructions, voice: newBotVoice)
+                            state.createBot(name: newBotName, instructions: newBotInstructions, voice: newBotVoice, role: newBotRole)
                             newBotName = ""
                             newBotInstructions = ""
                             newBotVoice = ""
+                            newBotRole = .auto
                             showCreateBot = false
                         }
                     }
@@ -416,6 +423,18 @@ struct ContentView: View {
                     }
                 }
 
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model Role Preset")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Picker("Role", selection: $state.editingBotRole) {
+                        ForEach(BotRolePreset.allCases) { r in
+                            Text(r.displayName).tag(r)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
                 HStack {
                     if !state.editingBotId.isEmpty {
                         Button(role: .destructive) {
@@ -434,7 +453,8 @@ struct ContentView: View {
                             id: state.editingBotId,
                             name: state.editingBotName,
                             instructions: state.editingBotInstructions,
-                            voice: state.editingBotVoice
+                            voice: state.editingBotVoice,
+                            role: state.editingBotRole
                         )
                         state.showEditPersonaModal = false
                     }
@@ -628,6 +648,18 @@ struct ChatView: View {
                 .keyboardShortcut("n", modifiers: .command)
                 .help("New Conversation")
 
+                // Auto-Speak (TTS) Toggle
+                Button {
+                    state.isTTSEnabled.toggle()
+                } label: {
+                    Image(systemName: state.isTTSEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                        .font(.system(size: 15))
+                        .foregroundColor(state.isTTSEnabled ? WhatsAppTheme.emerald : .secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(state.isWakeEnabled)
+                .help(state.isWakeEnabled ? "Voice replies stay on while Hey Friday is active" : (state.isTTSEnabled ? "Disable Auto Voice Replies" : "Enable Auto Voice Replies"))
+
                 // Settings Bar Toggle
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -662,6 +694,13 @@ struct ChatView: View {
                             }
                         }
                         .frame(maxWidth: 165)
+
+                        Picker("Role", selection: $state.currentBotRole) {
+                            ForEach(BotRolePreset.allCases) { r in
+                                Text(r.displayName).tag(r)
+                            }
+                        }
+                        .frame(maxWidth: 155)
                     }
 
                     if !state.availableMics.isEmpty {
@@ -687,12 +726,17 @@ struct ChatView: View {
                     Toggle("Hey Friday", isOn: $state.isWakeEnabled)
                         .toggleStyle(.switch)
 
+                    Toggle("Speak Replies", isOn: $state.isTTSEnabled)
+                        .toggleStyle(.switch)
+                        .disabled(state.isWakeEnabled)
+                        .help(state.isWakeEnabled ? "Always on when Hey Friday is enabled" : "Toggle automatic voice replies")
+
                     Button {
                         AssistantService.shared.stopSpeaking()
                     } label: {
-                        Image(systemName: "speaker.slash.fill")
+                        Image(systemName: "stop.circle.fill")
                     }
-                    .help("Mute Speech")
+                    .help("Stop Current Speech")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -1579,6 +1623,26 @@ struct ChatBubble: View {
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 2)
+                    } else if bodyText.hasPrefix("[Image: "),
+                              let closeIdx = bodyText.firstIndex(of: "]") {
+                        let pathStart = bodyText.index(bodyText.startIndex, offsetBy: 8)
+                        let imgPath = String(bodyText[pathStart..<closeIdx])
+                        let caption = String(bodyText[bodyText.index(after: closeIdx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let asset = OpenRouterClient.attachmentURL(imgPath), let nsImg = NSImage(contentsOf: asset) {
+                                Image(nsImage: nsImg)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: 340, maxHeight: 260)
+                                    .cornerRadius(8)
+                                    .onTapGesture {
+                                        NSWorkspace.shared.open(asset)
+                                    }
+                            }
+                            if !caption.isEmpty {
+                                MarkdownMessageView(text: caption, isUser: isUser)
+                            }
+                        }
                     } else {
                         MarkdownMessageView(text: bodyText, isUser: isUser)
                     }

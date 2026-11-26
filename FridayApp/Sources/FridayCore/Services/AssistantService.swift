@@ -28,6 +28,10 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         return speechSynthesizer.isSpeaking || pcmActive
     }
 
+    public var isMutedState: Bool {
+        ttsLock.withLock { isMuted }
+    }
+
     @MainActor public func setMuted(_ muted: Bool) {
         ttsLock.lock()
         self.isMuted = muted
@@ -258,8 +262,10 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         }
         guard (200..<300).contains(http.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            OpenRouterModelRegistry.shared.markFailure(model: model, statusCode: http.statusCode)
             throw FridayError.message("OpenRouter TTS failed (\(http.statusCode)): \(String(msg.prefix(200)))")
         }
+        OpenRouterModelRegistry.shared.recordRequest(isFreeVariant: model.hasSuffix(":free"))
         let sampleRate = parseOpenRouterSampleRate(contentType: http.value(forHTTPHeaderField: "Content-Type"))
         return (data, sampleRate)
     }
@@ -543,7 +549,8 @@ public final class AssistantService: NSObject, @unchecked Sendable, AVSpeechSynt
         """
 
         do {
-            let raw = try await executeRawChat(prompt: prompt, provider: provider, model: model)
+            let eff = MultiModelRouter.effectiveProviderAndModel(for: .fastChat, botProvider: provider, botModel: model)
+            let raw = try await executeRawChat(prompt: prompt, provider: eff.provider, model: eff.model)
             guard let start = raw.firstIndex(of: "["),
                   let end = raw.lastIndex(of: "]"), start <= end,
                   let data = raw[start...end].data(using: .utf8),

@@ -37,6 +37,30 @@ public final class HybridMemoryStore: @unchecked Sendable {
             scope TEXT,
             vector BLOB
         );
+        CREATE TABLE IF NOT EXISTS cloud_memory_vectors (
+            rowid INTEGER,
+            scope TEXT,
+            model_id TEXT,
+            dimensions INTEGER,
+            vector BLOB,
+            PRIMARY KEY(rowid, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS rag_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT,
+            title TEXT,
+            body TEXT,
+            media_type TEXT,
+            source_path TEXT,
+            created_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS rag_vectors (
+            doc_id INTEGER PRIMARY KEY,
+            scope TEXT,
+            model_id TEXT,
+            dimensions INTEGER,
+            vector BLOB
+        );
         CREATE TABLE IF NOT EXISTS graph_triples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scope TEXT,
@@ -348,6 +372,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 }
             }
 
+            try write("DELETE FROM cloud_memory_vectors WHERE rowid=?", [String(targetRowid)])
             try write("DELETE FROM memory_vectors WHERE rowid=?", [String(targetRowid)])
             if let vector = embeddingModel?.vector(for: text) {
                 try storeVector(rowid: targetRowid, scope: scope, vector: vector)
@@ -387,6 +412,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 throw FridayError.message("This memory changed. Refresh the search.")
             }
             try write("DELETE FROM memory_vectors WHERE rowid=?", [String(entry.id)])
+            try write("DELETE FROM cloud_memory_vectors WHERE rowid=?", [String(entry.id)])
             try write("DELETE FROM memory_metadata WHERE rowid=?", [String(entry.id)])
             try exec("COMMIT")
         } catch {
@@ -403,6 +429,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
         do {
             try write("DELETE FROM memories WHERE rowid=?", [String(id)])
             try write("DELETE FROM memory_vectors WHERE rowid=?", [String(id)])
+            try write("DELETE FROM cloud_memory_vectors WHERE rowid=?", [String(id)])
             try write("DELETE FROM memory_metadata WHERE rowid=?", [String(id)])
             try exec("COMMIT")
         } catch {
@@ -464,22 +491,31 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 try exec("""
                 DELETE FROM memories;
                 DELETE FROM memory_vectors;
+                DELETE FROM cloud_memory_vectors;
                 DELETE FROM memory_metadata;
                 DELETE FROM graph_triples;
+                DELETE FROM rag_vectors;
+                DELETE FROM rag_documents;
                 """)
             } else if scope == "shared" {
                 try exec("""
                 DELETE FROM memory_vectors WHERE rowid IN (SELECT rowid FROM memories WHERE scope = 'shared');
+                DELETE FROM cloud_memory_vectors WHERE rowid IN (SELECT rowid FROM memories WHERE scope = 'shared');
                 DELETE FROM memory_metadata WHERE rowid IN (SELECT rowid FROM memories WHERE scope = 'shared');
                 DELETE FROM memories WHERE scope = 'shared';
                 DELETE FROM graph_triples WHERE scope = 'shared';
+                DELETE FROM rag_vectors WHERE scope = 'shared';
+                DELETE FROM rag_documents WHERE scope = 'shared';
                 """)
             } else {
                 let ids = "SELECT rowid FROM memories WHERE scope=?"
                 try write("DELETE FROM memory_vectors WHERE rowid IN (" + ids + ")", [scope])
+                try write("DELETE FROM cloud_memory_vectors WHERE rowid IN (" + ids + ")", [scope])
                 try write("DELETE FROM memory_metadata WHERE rowid IN (" + ids + ")", [scope])
                 try write("DELETE FROM memories WHERE scope=?", [scope])
                 try write("DELETE FROM graph_triples WHERE scope=?", [scope])
+                try write("DELETE FROM rag_vectors WHERE scope=?", [scope])
+                try write("DELETE FROM rag_documents WHERE scope=?", [scope])
             }
             try exec("COMMIT")
         } catch {
@@ -532,6 +568,7 @@ public final class HybridMemoryStore: @unchecked Sendable {
                 let id = [String(match.id)]
                 if match.table == "memories" {
                     try write("DELETE FROM memory_vectors WHERE rowid=?",id)
+                    try write("DELETE FROM cloud_memory_vectors WHERE rowid=?",id)
                     try write("DELETE FROM memory_metadata WHERE rowid=?",id)
                     try write("DELETE FROM memories WHERE rowid=?",id)
                 } else {try write("DELETE FROM graph_triples WHERE id=?",id)}
@@ -711,5 +748,334 @@ public final class HybridMemoryStore: @unchecked Sendable {
         }
 
         return scored.sorted { $0.score > $1.score }.prefix(limit).map { $0.entry }
+    }
+
+    // MARK: - Cloud Multimodal Vectors & RAG Document Store
+
+    public func latestMemoryRowID(scope: String, body: String) throws -> Int64? {
+        lock.lock()
+        defer { lock.unlock() }
+        let stmt = try statement("SELECT rowid FROM memories WHERE scope=? AND body=? ORDER BY rowid DESC LIMIT 1", [scope, body])
+        defer { sqlite3_finalize(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : nil
+    }
+
+    public func embeddingTarget(scope: String, body: String) throws -> (id: Int64, revision: String)? {
+        lock.lock()
+        defer { lock.unlock() }
+        let stmt = try statement("SELECT rowid,revision FROM memories WHERE scope=? AND body=? ORDER BY rowid DESC LIMIT 1", [scope, body])
+        defer { sqlite3_finalize(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW ? (sqlite3_column_int64(stmt, 0), String(cString: sqlite3_column_text(stmt, 1))) : nil
+    }
+
+    public func storeCloudMemoryVector(rowid: Int64, scope: String, modelId: String, vector: [Float], revision: String? = nil) throws {
+        guard !vector.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        let blob = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        var stmt: OpaquePointer?
+        let sql = "INSERT OR REPLACE INTO cloud_memory_vectors(rowid, scope, model_id, dimensions, vector) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE rowid=? AND scope=? AND (? IS NULL OR revision=?))"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { throw failure() }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, rowid)
+        sqlite3_bind_text(stmt, 2, scope, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, modelId, -1, Self.transient)
+        sqlite3_bind_int(stmt, 4, Int32(vector.count))
+        _ = blob.withUnsafeBytes { ptr in
+            sqlite3_bind_blob(stmt, 5, ptr.baseAddress, Int32(blob.count), Self.transient)
+        }
+        sqlite3_bind_int64(stmt, 6, rowid)
+        sqlite3_bind_text(stmt, 7, scope, -1, Self.transient)
+        if let revision {
+            sqlite3_bind_text(stmt, 8, revision, -1, Self.transient)
+            sqlite3_bind_text(stmt, 9, revision, -1, Self.transient)
+        }
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+    }
+
+    public func searchWithOptionalCloudVector(
+        _ query: String,
+        cloudQueryVector: [Float]?,
+        modelId: String?,
+        scope: String,
+        limit: Int = 100
+    ) throws -> [MemoryEntry] {
+        guard let cloudQueryVector, !cloudQueryVector.isEmpty else {
+            return try search(query, scope: scope, limit: limit)
+        }
+        lock.lock()
+        defer { lock.unlock() }
+
+        let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lexicalResults = try ftsSearch(cleanQuery, scope: scope, limit: limit, pinnedOnly: false)
+        let vectorResults = try cloudVectorSearch(cloudQueryVector, modelId: modelId, scope: scope, limit: limit)
+
+        // Blend lexical rank and dimension-safe cloud cosine similarity, falling back cleanly when no cloud rows exist yet.
+        if vectorResults.isEmpty {
+            if !cleanQuery.isEmpty, let localVec = embeddingModel?.vector(for: cleanQuery)?.map({ Float($0) }) {
+                let localResults = try vdspVectorSearch(localVec, scope: scope, limit: limit)
+                return mergeRanked(lexical: lexicalResults, vector: localResults, limit: limit)
+            }
+            return lexicalResults
+        }
+        return mergeRanked(lexical: lexicalResults, vector: vectorResults, limit: limit)
+    }
+
+    private func mergeRanked(lexical: [MemoryEntry], vector: [MemoryEntry], limit: Int) -> [MemoryEntry] {
+        var compositeMap = [Int64: Double]()
+        var entryMap = [Int64: MemoryEntry]()
+        let now = Date().timeIntervalSince1970
+        for (rank, entry) in lexical.enumerated() {
+            entryMap[entry.id] = entry
+            compositeMap[entry.id] = 0.55 / Double(rank + 1)
+        }
+        for entry in vector {
+            entryMap[entry.id] = entry
+            compositeMap[entry.id, default: 0] += 0.40 * max(0, entry.similarity ?? 0)
+        }
+        for (id, entry) in entryMap {
+            let days = max(0, (now - entry.lastAccessedAt.timeIntervalSince1970) / 86400)
+            compositeMap[id, default: 0] += 0.03 * exp(-0.05 * days) + 0.02 * Double(entry.importance) / 10
+        }
+        return compositeMap.sorted { $0.value > $1.value }
+            .prefix(limit)
+            .compactMap { pair -> MemoryEntry? in
+                guard let base = entryMap[pair.key] else { return nil }
+                return MemoryEntry(
+                    id: base.id,
+                    scope: base.scope,
+                    body: base.body,
+                    source: base.source,
+                    revision: base.revision,
+                    importance: base.importance,
+                    createdAt: base.createdAt,
+                    lastAccessedAt: base.lastAccessedAt,
+                    similarity: base.similarity,
+                    compositeScore: pair.value
+                )
+            }
+    }
+
+    private func cloudVectorSearch(_ queryVector: [Float], modelId: String?, scope: String, limit: Int) throws -> [MemoryEntry] {
+        var sql = """
+        SELECT m.rowid, m.scope, m.body, m.source, m.revision,
+               COALESCE(d.importance, 5), COALESCE(d.created_at, 0), COALESCE(d.last_accessed_at, 0), v.vector
+        FROM memories m
+        JOIN cloud_memory_vectors v ON m.rowid = v.rowid
+        LEFT JOIN memory_metadata d ON m.rowid = d.rowid
+        WHERE v.dimensions = ?
+        """
+        var args = [String(queryVector.count)]
+        if let modelId, !modelId.isEmpty {
+            sql += " AND v.model_id = ?"
+            args.append(modelId)
+        }
+        if scope == "shared" {
+            sql += " AND m.scope = 'shared'"
+        } else if scope != "all" {
+            sql += " AND m.scope IN ('shared', ?)"
+            args.append(scope)
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { throw failure() }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(queryVector.count))
+        for (idx, arg) in args.dropFirst().enumerated() {
+            sqlite3_bind_text(stmt, Int32(idx + 2), arg, -1, Self.transient)
+        }
+
+        var scored = [(entry: MemoryEntry, score: Float)]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rowid = sqlite3_column_int64(stmt, 0)
+            let entryScope = String(cString: sqlite3_column_text(stmt, 1))
+            let body = String(cString: sqlite3_column_text(stmt, 2))
+            let source = String(cString: sqlite3_column_text(stmt, 3))
+            let revision = String(cString: sqlite3_column_text(stmt, 4))
+            let importance = Int(sqlite3_column_int(stmt, 5))
+            let created = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+            let accessed = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
+            if let blobPtr = sqlite3_column_blob(stmt, 8) {
+                let count = sqlite3_column_bytes(stmt, 8)
+                let candidate = decodeVector(Data(bytes: blobPtr, count: Int(count)))
+                guard candidate.count == queryVector.count else { continue }
+                let sim = vdspCosineSimilarity(queryVector, candidate)
+                scored.append((
+                    MemoryEntry(
+                        id: rowid,
+                        scope: entryScope,
+                        body: body,
+                        source: source,
+                        revision: revision,
+                        importance: importance,
+                        createdAt: created,
+                        lastAccessedAt: accessed,
+                        similarity: Double(sim)
+                    ),
+                    sim
+                ))
+            }
+        }
+        return scored.sorted { $0.score > $1.score }.prefix(limit).map(\.entry)
+    }
+
+    @discardableResult
+    public func saveDocumentChunks(_ chunks: [(text: String, model: String, vector: [Float]?)], scope: String, title: String, mediaType: String, sourcePath: String?) throws -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var firstID: Int64 = 0
+            for chunk in chunks {
+                let id = try insertDocument(scope: scope, title: title, body: chunk.text, mediaType: mediaType, sourcePath: sourcePath, modelId: chunk.model, vector: chunk.vector)
+                if firstID == 0 { firstID = id }
+            }
+            try exec("COMMIT")
+            return firstID
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func saveRAGDocument(
+        scope: String,
+        title: String,
+        body: String,
+        mediaType: String = "text",
+        sourcePath: String? = nil,
+        modelId: String = "",
+        vector: [Float]? = nil
+    ) throws -> Int64 {
+        try saveDocumentChunks([(body, modelId, vector)], scope: scope, title: title, mediaType: mediaType, sourcePath: sourcePath)
+    }
+
+    private func insertDocument(
+        scope: String,
+        title: String,
+        body: String,
+        mediaType: String = "text",
+        sourcePath: String? = nil,
+        modelId: String = "",
+        vector: [Float]? = nil
+    ) throws -> Int64 {
+        let now = Date().timeIntervalSince1970
+        var stmt: OpaquePointer?
+        let sql = "INSERT INTO rag_documents(scope, title, body, media_type, source_path, created_at) VALUES(?, ?, ?, ?, ?, ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { throw failure() }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, scope, -1, Self.transient)
+        sqlite3_bind_text(stmt, 2, title, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, body, -1, Self.transient)
+        sqlite3_bind_text(stmt, 4, mediaType, -1, Self.transient)
+        sqlite3_bind_text(stmt, 5, sourcePath ?? "", -1, Self.transient)
+        sqlite3_bind_double(stmt, 6, now)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw failure() }
+
+        let docId = sqlite3_last_insert_rowid(db)
+        let activeVector: [Float]? = vector ?? embeddingModel?.vector(for: body)?.map { Float($0) }
+        let activeModel = vector != nil ? modelId : "apple-nl-embedding"
+        if let activeVector, !activeVector.isEmpty {
+            let blob = activeVector.withUnsafeBufferPointer { Data(buffer: $0) }
+            var vStmt: OpaquePointer?
+            let vSql = "INSERT OR REPLACE INTO rag_vectors(doc_id, scope, model_id, dimensions, vector) VALUES(?, ?, ?, ?, ?)"
+            if sqlite3_prepare_v2(db, vSql, -1, &vStmt, nil) == SQLITE_OK, let vStmt {
+                defer { sqlite3_finalize(vStmt) }
+                sqlite3_bind_int64(vStmt, 1, docId)
+                sqlite3_bind_text(vStmt, 2, scope, -1, Self.transient)
+                sqlite3_bind_text(vStmt, 3, activeModel, -1, Self.transient)
+                sqlite3_bind_int(vStmt, 4, Int32(activeVector.count))
+                _ = blob.withUnsafeBytes { ptr in
+                    sqlite3_bind_blob(vStmt, 5, ptr.baseAddress, Int32(blob.count), Self.transient)
+                }
+                _ = sqlite3_step(vStmt)
+            }
+        }
+        return docId
+    }
+
+    public func searchRAGDocuments(
+        query: String,
+        queryVector: [Float]?,
+        modelId: String?,
+        scope: String,
+        limit: Int = 10
+    ) throws -> [(title: String, body: String, score: Double)] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let targetVector = queryVector ?? embeddingModel?.vector(for: query)?.map { Float($0) }
+        var sql = """
+        SELECT d.title, d.body, v.vector, v.dimensions, v.model_id
+        FROM rag_documents d
+        LEFT JOIN rag_vectors v ON d.id = v.doc_id
+        """
+        var args = [String]()
+        if scope == "shared" {
+            sql += " WHERE d.scope = 'shared'"
+        } else if scope != "all" {
+            sql += " WHERE d.scope IN ('shared', ?)"
+            args.append(scope)
+        }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { throw failure() }
+        defer { sqlite3_finalize(stmt) }
+        for (i, a) in args.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), a, -1, Self.transient)
+        }
+
+        let lowerQ = query.lowercased()
+        let terms = lowerQ.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        var hits = [(title: String, body: String, score: Double)]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let title = String(cString: sqlite3_column_text(stmt, 0))
+            let body = String(cString: sqlite3_column_text(stmt, 1))
+            var score = 0.0
+            let hay = (title + " " + body).lowercased()
+            if !terms.isEmpty {
+                let matched = terms.filter { hay.contains($0) }.count
+                score += 0.35 * Double(matched) / Double(terms.count)
+            }
+            if let targetVector, let blobPtr = sqlite3_column_blob(stmt, 2) {
+                let dims = Int(sqlite3_column_int(stmt, 3))
+                let vecModel = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+                let modelOk = vecModel == (queryVector == nil ? "apple-nl-embedding" : modelId)
+                if dims == targetVector.count && modelOk {
+                    let count = sqlite3_column_bytes(stmt, 2)
+                    let vec = decodeVector(Data(bytes: blobPtr, count: Int(count)))
+                    score += 0.65 * max(0, Double(vdspCosineSimilarity(targetVector, vec)))
+                }
+            }
+            if score > 0 || lowerQ.isEmpty {
+                hits.append((title: title, body: body, score: score))
+            }
+        }
+        return hits.sorted { $0.score > $1.score }.prefix(limit).map { $0 }
+    }
+
+    public func listRAGDocuments(scope: String, limit: Int = 50) throws -> [(id: Int64, title: String, mediaType: String, createdAt: Date)] {
+        lock.lock()
+        defer { lock.unlock() }
+        var sql = "SELECT id, title, media_type, created_at FROM rag_documents"
+        var args = [String]()
+        if scope == "shared" {
+            sql += " WHERE scope = 'shared'"
+        } else if scope != "all" {
+            sql += " WHERE scope IN ('shared', ?)"
+            args.append(scope)
+        }
+        sql += " ORDER BY id DESC LIMIT ?"
+        let stmt = try statement(sql, args + [String(limit)])
+        defer { sqlite3_finalize(stmt) }
+        var rows = [(id: Int64, title: String, mediaType: String, createdAt: Date)]()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append((
+                id: sqlite3_column_int64(stmt, 0),
+                title: String(cString: sqlite3_column_text(stmt, 1)),
+                mediaType: String(cString: sqlite3_column_text(stmt, 2)),
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+            ))
+        }
+        return rows
     }
 }

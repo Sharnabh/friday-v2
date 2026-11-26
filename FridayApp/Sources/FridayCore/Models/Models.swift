@@ -188,8 +188,9 @@ public struct HeyGenVoiceOption: Identifiable, Hashable, Sendable {
 
 public enum HeyGenTTSCatalog {
     public static let speechEndpoint = "https://openrouter.ai/api/v1/audio/speech"
-    public static let defaultModel = "heygen/heygen-voice-1-turbo"
+    public static let defaultModel = "heygen/heygen-voice-1-turbo:free"
     public static let availableModels: [(id: String, label: String)] = [
+        ("heygen/heygen-voice-1-turbo:free", "HeyGen Voice Turbo (Free)"),
         ("heygen/heygen-voice-1-turbo", "HeyGen Voice Turbo (Low Latency)"),
         ("heygen/heygen-voice-1", "HeyGen Voice Standard")
     ]
@@ -209,17 +210,130 @@ public enum HeyGenTTSCatalog {
     ]
 }
 
+public enum ModelRole: String, Codable, CaseIterable, Identifiable, Sendable {
+    case orchestrator
+    case fastChat
+    case coding
+    case vision
+    case decisions
+    case decisionsFast
+    case embeddings
+    case rerank
+    case imageGen
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .orchestrator: return "Master Orchestrator"
+        case .fastChat: return "Fast Chat & Routing"
+        case .coding: return "Coding & Automation"
+        case .vision: return "Vision & PDF/Video"
+        case .decisions: return "Decision Model"
+        case .decisionsFast: return "Fast Decision Router"
+        case .embeddings: return "Multimodal Embeddings"
+        case .rerank: return "Search Reranker"
+        case .imageGen: return "Image Generation"
+        }
+    }
+
+    public var requiredOutputModality: String {
+        switch self {
+        case .orchestrator, .fastChat, .coding, .vision: return "text"
+        case .decisions, .decisionsFast: return "decisions"
+        case .embeddings: return "embeddings"
+        case .rerank: return "rerank"
+        case .imageGen: return "image"
+        }
+    }
+}
+
+public enum BotRolePreset: String, Codable, CaseIterable, Identifiable, Sendable {
+    case auto
+    case orchestrator
+    case fastChat
+    case coding
+    case vision
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .auto: return "Auto (By Task)"
+        case .orchestrator: return "Orchestrator (Deep)"
+        case .fastChat: return "Fast Chat (Low Latency)"
+        case .coding: return "Coding Specialist"
+        case .vision: return "Vision & Docs"
+        }
+    }
+
+    public var modelRole: ModelRole {
+        switch self {
+        case .auto, .orchestrator: return .orchestrator
+        case .fastChat: return .fastChat
+        case .coding: return .coding
+        case .vision: return .vision
+        }
+    }
+}
+
+public enum MemoryEmbeddingMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case localOnly
+    case multimodalRAG
+    case cloudAll
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .localOnly: return "Local Only (0 Quota)"
+        case .multimodalRAG: return "Cloud Docs / RAG Only"
+        case .cloudAll: return "Cloud Hybrid (All Memories)"
+        }
+    }
+}
+
+public struct OpenRouterModelDescriptor: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let contextLength: Int
+    public let inputModalities: [String]
+    public let outputModalities: [String]
+    public let supportedParameters: [String]
+    public let isFree: Bool
+
+    public init(
+        id: String,
+        name: String,
+        contextLength: Int,
+        inputModalities: [String],
+        outputModalities: [String],
+        supportedParameters: [String] = [],
+        isFree: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.contextLength = contextLength
+        self.inputModalities = inputModalities
+        self.outputModalities = outputModalities
+        self.supportedParameters = supportedParameters
+        self.isFree = isFree
+    }
+}
+
 public struct BotProfile: Codable, Identifiable, Sendable {
     public var id: String
     public var name: String
     public var instructions: String
     public var voice: String
+    public var role: BotRolePreset
 
-    public init(id: String, name: String, instructions: String, voice: String = "") {
+    public init(id: String, name: String, instructions: String, voice: String = "", role: BotRolePreset = .auto) {
         self.id = id
         self.name = name
         self.instructions = instructions
         self.voice = voice
+        self.role = role
     }
 
     public init(from decoder: Decoder) throws {
@@ -228,10 +342,11 @@ public struct BotProfile: Codable, Identifiable, Sendable {
         self.name = try container.decode(String.self, forKey: .name)
         self.instructions = try container.decode(String.self, forKey: .instructions)
         self.voice = (try? container.decodeIfPresent(String.self, forKey: .voice)) ?? ""
+        self.role = (try? container.decodeIfPresent(BotRolePreset.self, forKey: .role)) ?? .auto
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, instructions, voice
+        case id, name, instructions, voice, role
     }
 }
 
@@ -324,7 +439,7 @@ public struct MacPlan: Decodable, Sendable {
 
 public struct ScreenRoute: Decodable, Sendable {
     public enum Source: String, Decodable, Sendable {
-        case active, visual, editor, previous, control, remember, mailReply, calendarReply, messageDraft, chat
+        case active, visual, editor, previous, control, remember, mailReply, calendarReply, messageDraft, generateImage, chat
     }
     public enum Mode: String, Decodable, Sendable {
         case answer, verbatim
@@ -334,11 +449,13 @@ public struct ScreenRoute: Decodable, Sendable {
         public let due: String?
     }
 
+    public let chatRole: String?
     public let followUp: FollowUp?
     public let source: Source
     public let mode: Mode
     
     public init(source: Source, mode: Mode) {
+        self.chatRole = nil
         self.followUp = nil
         self.source = source
         self.mode = mode
