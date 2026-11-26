@@ -24,10 +24,11 @@ struct SettingsWorkspace: View {
     }
 
     var body: some View {
-        WorkspacePage(title: "Settings", selection: $section, sections: ["Mac setup", "Models", "Voice", "Backup"]) {
+        WorkspacePage(title: "Settings", selection: $section, sections: ["Mac setup", "Models", "Voice", "Android", "Backup"]) {
             switch section {
             case "Models": modelSettings; routingSettings
             case "Voice": voiceSettings
+            case "Android": MobileConnectionSettings(companion: state.mobileCompanion, state: state)
             case "Backup": LocalTools(isBackup: true)
             default: SetupView()
             }
@@ -162,6 +163,33 @@ struct SettingsWorkspace: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+private struct MobileConnectionSettings: View {
+    @ObservedObject var companion: MobileCompanion
+    let state: AppState
+
+    var body: some View {
+        GroupBox("Android companion") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(companion.status).font(.headline)
+                Text("Pair your phone to share this Mac’s active chat, models and assistant tools. Keep FRIDAY running while connected.")
+                if companion.token.isEmpty {
+                    Button("Enable pairing") { companion.start(state) }
+                } else {
+                    Text("For USB, connect the phone with USB debugging enabled and run this command on the Mac.")
+                    Text("adb reverse tcp:8765 tcp:8765").font(.body.monospaced()).textSelection(.enabled)
+                    HStack {
+                        Button("Copy pairing token") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(companion.token, forType: .string)
+                        }
+                        Button("Disconnect phone") { companion.stop() }
+                    }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
         }
     }
 }

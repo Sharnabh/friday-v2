@@ -191,6 +191,7 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
+    let mobileCompanion = MobileCompanion()
     private let defaults:UserDefaults
     private let servicesEnabled: Bool
     private var activeStream: StreamChunkBuffer?
