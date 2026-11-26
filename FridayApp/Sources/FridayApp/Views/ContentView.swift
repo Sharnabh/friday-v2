@@ -1,65 +1,29 @@
 import SwiftUI
 import FridayCore
 
-// MARK: - WhatsApp Theme Palette
-
-struct WhatsAppTheme {
-    static func wallpaper(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.043, green: 0.078, blue: 0.102) // #0B141A
-            : Color(red: 0.937, green: 0.918, blue: 0.886) // #EFEAE2
+private enum DesktopTheme {
+    static func canvas(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 0.051, green: 0.067, blue: 0.090) : .white
     }
 
-    static func headerBg(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.078, green: 0.114, blue: 0.137) // #141D23
-            : Color(red: 0.941, green: 0.949, blue: 0.961) // #F0F2F5
+    static func sidebar(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 0.004, green: 0.016, blue: 0.035)
+                        : Color(red: 0.965, green: 0.973, blue: 0.98)
     }
 
-    static func inputBarBg(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.078, green: 0.114, blue: 0.137) // #141D23
-            : Color(red: 0.941, green: 0.949, blue: 0.961) // #F0F2F5
-    }
-
-    static func inputFieldBg(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.165, green: 0.224, blue: 0.259) // #2A3942
-            : Color.white
+    static func field(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 0.086, green: 0.106, blue: 0.133) : .white
     }
 
     static func userBubble(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.0, green: 0.361, blue: 0.294)   // #005C4B
-            : Color(red: 0.851, green: 0.992, blue: 0.827) // #D9FDD3
+        accent.opacity(scheme == .dark ? 0.2 : 0.075)
     }
 
-    static func botBubble(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.125, green: 0.173, blue: 0.200) // #202C33
-            : Color.white                                   // #FFFFFF
-    }
-
-    static func userText(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.914, green: 0.929, blue: 0.937) // #E9EDEF
-            : Color(red: 0.067, green: 0.106, blue: 0.129) // #111B21
-    }
-
-    static func botText(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.914, green: 0.929, blue: 0.937)
-            : Color(red: 0.067, green: 0.106, blue: 0.129)
-    }
-
-    static func timestamp(for scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.525, green: 0.588, blue: 0.627) // #8696A0
-            : Color(red: 0.400, green: 0.467, blue: 0.502) // #667781
-    }
-
-    static let emerald = Color(red: 0.0, green: 0.659, blue: 0.518)   // #00A884
-    static let blueTick = Color(red: 0.325, green: 0.741, blue: 0.922) // #53BDEB
+    static let accent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.290, green: 0.518, blue: 0.996, alpha: 1)
+            : NSColor(srgbRed: 0, green: 0.325, blue: 0.992, alpha: 1)
+    })
 }
 
 func avatarInitials(for name: String) -> String {
@@ -100,21 +64,32 @@ struct ContentView: View {
     @State private var selectedGroupMembers = Set<String>()
     @State private var searchChatQuery = ""
 
+    private func workspaceLink(_ title: String, icon: String, tab: Int) -> some View {
+        Button { state.selectedTab = tab } label: {
+            Label(title, systemImage: icon)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(state.selectedTab == tab ? DesktopTheme.accent : Color.primary)
+        .accessibilityAddTraits(state.selectedTab == tab ? .isSelected : [])
+    }
+
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                // WhatsApp-Style Sidebar Header
                 HStack(spacing: 10) {
                     ZStack {
-                        Circle()
-                            .fill(WhatsAppTheme.emerald)
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(DesktopTheme.accent)
                             .frame(width: 36, height: 36)
-                        Image(systemName: "person.crop.circle.fill")
+                        Image(systemName: "waveform")
                             .font(.system(size: 24))
                             .foregroundColor(.white)
                     }
 
-                    Text("Chats")
+                    Text("FRIDAY")
                         .font(.system(size: 19, weight: .bold))
                         .foregroundColor(.primary)
 
@@ -142,22 +117,21 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(WhatsAppTheme.headerBg(for: colorScheme))
+                .background(DesktopTheme.sidebar(for: colorScheme))
 
                 Divider()
 
-                // WhatsApp Search Bar
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.secondary)
                         .font(.system(size: 13))
-                    TextField("Search or start new chat", text: $searchChatQuery)
+                    TextField("Find bots and groups", text: $searchChatQuery)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
+                .background(DesktopTheme.field(for: colorScheme))
                 .cornerRadius(8)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -166,9 +140,9 @@ struct ContentView: View {
 
                 // Contact & Group Chat List
                 List(selection: $state.activeBotId) {
-                    Section("Core Assistant") {
+                    Section("Assistant") {
                         NavigationLink(value: "") {
-                            WhatsAppChatRow(
+                            ConversationRow(
                                 name: state.fridayName,
                                 subtitle: state.latestSnippet(for: ""),
                                 isGroup: false,
@@ -188,7 +162,7 @@ struct ContentView: View {
                         Section("Bots") {
                             ForEach(filteredBots) { bot in
                                 NavigationLink(value: bot.id) {
-                                    WhatsAppChatRow(
+                                    ConversationRow(
                                         name: bot.name,
                                         subtitle: state.latestSnippet(for: bot.id),
                                         isGroup: false,
@@ -216,7 +190,7 @@ struct ContentView: View {
                         Section("Groups") {
                             ForEach(filteredGroups) { group in
                                 NavigationLink(value: group.id) {
-                                    WhatsAppChatRow(
+                                    ConversationRow(
                                         name: group.name,
                                         subtitle: "\(group.members.count) members",
                                         isGroup: true,
@@ -241,27 +215,18 @@ struct ContentView: View {
                     }
 
                     Section("Workspaces") {
-                        Button {state.selectedTab=3} label:{Label("Tools & workspaces",systemImage:"wrench.and.screwdriver")}
-                        Button {
-                            state.selectedTab = 0
-                        } label: {
-                            Label("Messages", systemImage: "bubble.left.and.bubble.right")
-                        }
-                        Button {
-                            state.selectedTab = 1
-                        } label: {
-                            Label("Memory Vault", systemImage: "brain.head.profile")
-                        }
-                        Button {
-                            state.selectedTab = 2
-                        } label: {
-                            Label("Reminders & Tasks", systemImage: "clock.badge.checkmark")
-                        }
+                        workspaceLink("Chat", icon: "bubble.left.and.bubble.right", tab: 0)
+                        workspaceLink("Memory Vault", icon: "brain.head.profile", tab: 1)
+                        workspaceLink("Reminders & Tasks", icon: "clock.badge.checkmark", tab: 2)
+                        workspaceLink("Tools & workspaces", icon: "wrench.and.screwdriver", tab: 3)
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
                 .disabled(state.isBusy)
             }
+            .background(DesktopTheme.sidebar(for: colorScheme))
+            .navigationSplitViewColumnWidth(min: 205, ideal: 235, max: 290)
             .navigationTitle("")
         } detail: {
             Group {
@@ -481,9 +446,8 @@ struct ContentView: View {
     }
 }
 
-// MARK: - WhatsApp Sidebar Row
 
-struct WhatsAppChatRow: View {
+struct ConversationRow: View {
     let name: String
     let subtitle: String
     let isGroup: Bool
@@ -492,9 +456,9 @@ struct WhatsAppChatRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                Circle()
-                    .fill(isGroup ? Color.orange : avatarColor(for: name))
-                    .frame(width: 38, height: 38)
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isCore ? DesktopTheme.accent : avatarColor(for: name))
+                    .frame(width: 30, height: 30)
 
                 if isGroup {
                     Image(systemName: "person.3.sequence.fill")
@@ -527,7 +491,6 @@ struct WhatsAppChatRow: View {
     }
 }
 
-// MARK: - WhatsApp Main Chat View
 
 struct ChatView: View {
     @EnvironmentObject var state: AppState
@@ -538,12 +501,11 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // WhatsApp Top Chat Bar
             HStack(spacing: 12) {
                 // Contact Avatar
                 ZStack {
-                    Circle()
-                        .fill(state.isGroupSelected ? Color.orange : avatarColor(for: state.currentBotDisplayName))
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(state.activeBotId.isEmpty ? DesktopTheme.accent : avatarColor(for: state.currentBotDisplayName))
                         .frame(width: 40, height: 40)
 
                     if state.isGroupSelected {
@@ -573,7 +535,7 @@ struct ChatView: View {
                             .lineLimit(2)
                             .help(state.statusMessage)
                             .font(.system(size: 12))
-                            .foregroundColor(WhatsAppTheme.emerald)
+                            .foregroundColor(DesktopTheme.accent)
                     } else if state.isGroupSelected {
                         Button {
                             state.openGroupEditor(groupId: state.activeBotId)
@@ -654,7 +616,7 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: state.isTTSEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
                         .font(.system(size: 15))
-                        .foregroundColor(state.isTTSEnabled ? WhatsAppTheme.emerald : .secondary)
+                        .foregroundColor(state.isTTSEnabled ? DesktopTheme.accent : .secondary)
                 }
                 .buttonStyle(.plain)
                 .disabled(state.isWakeEnabled)
@@ -668,16 +630,15 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: showSettingsBar ? "gearshape.fill" : "gearshape")
                         .font(.system(size: 15))
-                        .foregroundColor(showSettingsBar ? WhatsAppTheme.emerald : .secondary)
+                        .foregroundColor(showSettingsBar ? DesktopTheme.accent : .secondary)
                 }
                 .buttonStyle(.plain)
                 .help("Audio & Model Settings")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(WhatsAppTheme.headerBg(for: colorScheme))
+            .background(DesktopTheme.sidebar(for: colorScheme))
 
-            // Expandable Settings Drawer (WhatsApp Clean Integration)
             if showSettingsBar {
                 HStack(spacing: 12) {
                     TextField("Provider override", text: $state.provider)
@@ -740,27 +701,26 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(WhatsAppTheme.headerBg(for: colorScheme).opacity(0.85))
+                .background(DesktopTheme.sidebar(for: colorScheme).opacity(0.85))
                 Divider()
             }
 
             if state.audioLevel > 0.05 {
                 ProgressView(value: state.audioLevel)
                     .progressViewStyle(.linear)
-                    .tint(WhatsAppTheme.emerald)
+                    .tint(DesktopTheme.accent)
                     .padding(.horizontal)
             }
 
-            // WhatsApp Message Canvas with Signature Wallpaper
             ZStack(alignment: .top) {
-                WhatsAppTheme.wallpaper(for: colorScheme)
+                DesktopTheme.canvas(for: colorScheme)
                     .ignoresSafeArea()
 
                 ScrollViewReader { proxy in
                     let botNames = state.mentionableBots.map(\.name)
                     let lastIndex = state.currentTranscript.indices.last
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 16) {
                             ForEach(Array(state.currentTranscript.enumerated()), id: \.offset) { index, turn in
                                 ChatBubble(
                                     text: turn,
@@ -770,8 +730,10 @@ struct ChatView: View {
                                 .id(index)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .frame(maxWidth: 780)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 24)
+                        .frame(maxWidth: .infinity)
                     }
                     .onChange(of: state.currentTranscript.count) { _, _ in
                         if let last = state.currentTranscript.indices.last {
@@ -791,7 +753,7 @@ struct ChatView: View {
                 if state.showMemoryToast, let notice = state.lastMemoryUpdateNotice {
                     HStack(spacing: 8) {
                         Image(systemName: "sparkles")
-                            .foregroundColor(WhatsAppTheme.emerald)
+                            .foregroundColor(DesktopTheme.accent)
                             .font(.system(size: 13, weight: .semibold))
 
                         Text("Memory updated:")
@@ -811,7 +773,7 @@ struct ChatView: View {
                         } label: {
                             Text("Manage")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(WhatsAppTheme.emerald)
+                                .foregroundColor(DesktopTheme.accent)
                         }
                         .buttonStyle(.plain)
 
@@ -828,10 +790,10 @@ struct ChatView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
+                    .background(DesktopTheme.field(for: colorScheme))
                     .cornerRadius(20)
                     .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 3)
-                    .overlay(Capsule().stroke(WhatsAppTheme.emerald.opacity(0.4), lineWidth: 1))
+                    .overlay(Capsule().stroke(DesktopTheme.accent.opacity(0.4), lineWidth: 1))
                     .padding(.horizontal, 24)
                     .padding(.top, 10)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -864,7 +826,7 @@ struct ChatView: View {
                             HStack(spacing: 8) {
                                 ZStack {
                                     Circle()
-                                        .fill(bot.id.isEmpty ? WhatsAppTheme.emerald : avatarColor(for: bot.name))
+                                        .fill(bot.id.isEmpty ? DesktopTheme.accent : avatarColor(for: bot.name))
                                         .frame(width: 24, height: 24)
                                     Text(avatarInitials(for: bot.name))
                                         .font(.system(size: 10, weight: .bold))
@@ -886,7 +848,7 @@ struct ChatView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .background(WhatsAppTheme.headerBg(for: colorScheme))
+                .background(DesktopTheme.sidebar(for: colorScheme))
                 .cornerRadius(12)
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.25)))
                 .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
@@ -894,7 +856,6 @@ struct ChatView: View {
                 .padding(.bottom, 6)
             }
 
-            // WhatsApp Bottom Input Bar
             HStack(alignment: .bottom, spacing: 10) {
                 // Attachment Button
                 Button {
@@ -908,9 +869,8 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .help("Quick Settings")
 
-                // WhatsApp Capsule Auto-Expanding Text Composer (Enter sends, Shift+Enter inserts newline)
                 HStack {
-                    WhatsAppComposerView(
+                    MessageComposer(
                         text: $state.inputMessage,
                         dynamicHeight: $composerHeight,
                         isDisabled: state.isBusy,
@@ -919,16 +879,8 @@ struct ChatView: View {
                     )
                     .frame(height: composerHeight)
                 }
-                .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
-                .cornerRadius(20)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                )
 
-                // Voice Recording or WhatsApp Green Send Button
                 if state.inputMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         state.toggleVoiceRecording()
@@ -950,17 +902,16 @@ struct ChatView: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .fill(WhatsAppTheme.emerald)
+                                .fill(DesktopTheme.accent)
                                 .frame(width: 36, height: 36)
                             if state.isBusy {
                                 ProgressView()
                                     .controlSize(.small)
                                     .colorInvert()
                             } else {
-                                Image(systemName: "paperplane.fill")
+                                Image(systemName: "arrow.up")
                                     .font(.system(size: 14))
                                     .foregroundColor(.white)
-                                    .offset(x: -1, y: 1)
                             }
                         }
                     }
@@ -971,7 +922,13 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(WhatsAppTheme.inputBarBg(for: colorScheme))
+            .frame(maxWidth: 780)
+            .background(DesktopTheme.field(for: colorScheme), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.28)))
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(DesktopTheme.canvas(for: colorScheme))
         }
     }
 }
@@ -1200,7 +1157,7 @@ struct MarkdownInlineText: View {
         var attr = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
 
         // Set base text color
-        let baseFg = isUser ? WhatsAppTheme.userText(for: colorScheme) : WhatsAppTheme.botText(for: colorScheme)
+        let baseFg = Color.primary
         attr.foregroundColor = baseFg
 
         // 1. Highlight inline code
@@ -1272,7 +1229,7 @@ struct MarkdownCodeBlockView: View {
             HStack {
                 Text(language.uppercased())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme).opacity(0.7) : .secondary)
+                    .foregroundColor(isUser ? Color.primary.opacity(0.7) : .secondary)
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents()
@@ -1288,7 +1245,7 @@ struct MarkdownCodeBlockView: View {
                         Text(isCopied ? "Copied" : "Copy")
                             .font(.system(size: 10, weight: .medium))
                     }
-                    .foregroundColor(isCopied ? .green : (isUser ? WhatsAppTheme.userText(for: colorScheme).opacity(0.7) : .secondary))
+                    .foregroundColor(isCopied ? .green : (isUser ? Color.primary.opacity(0.7) : .secondary))
                 }
                 .buttonStyle(.plain)
             }
@@ -1301,7 +1258,7 @@ struct MarkdownCodeBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundColor(isUser ? WhatsAppTheme.userText(for: colorScheme) : (colorScheme == .dark ? Color(white: 0.92) : Color(white: 0.12)))
+                    .foregroundColor(isUser ? Color.primary : (colorScheme == .dark ? Color(white: 0.92) : Color(white: 0.12)))
                     .padding(10)
                     .textSelection(.enabled)
             }
@@ -1381,7 +1338,7 @@ struct MarkdownMessageView: View {
                 case .quote(let qText):
                     HStack(alignment: .top, spacing: 8) {
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(WhatsAppTheme.emerald.opacity(0.85))
+                            .fill(DesktopTheme.accent.opacity(0.85))
                             .frame(width: 3)
                         MarkdownInlineText(text: qText, isUser: isUser)
                             .italic()
@@ -1395,7 +1352,7 @@ struct MarkdownMessageView: View {
                             HStack(alignment: .top, spacing: 6) {
                                 Text("•")
                                     .font(.system(size: 14, weight: .bold))
-                                    .foregroundColor(WhatsAppTheme.emerald)
+                                    .foregroundColor(DesktopTheme.accent)
                                 MarkdownInlineText(text: items[itemIdx], isUser: isUser)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -1409,7 +1366,7 @@ struct MarkdownMessageView: View {
                             HStack(alignment: .top, spacing: 6) {
                                 Text(item.number)
                                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                    .foregroundColor(WhatsAppTheme.emerald)
+                                    .foregroundColor(DesktopTheme.accent)
                                 MarkdownInlineText(text: item.text, isUser: isUser)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -1432,9 +1389,8 @@ struct MarkdownMessageView: View {
     }
 }
 
-// MARK: - Multiline WhatsApp Composer (Shift+Enter newline, Enter send)
 
-struct WhatsAppComposerView: NSViewRepresentable {
+struct MessageComposer: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
     var isDisabled: Bool
@@ -1518,13 +1474,13 @@ struct WhatsAppComposerView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: WhatsAppComposerView
+        var parent: MessageComposer
         weak var textView: NSTextView?
         weak var placeholderField: NSTextField?
         var lastFocusTrigger: Int = 0
         private var lastMeasuredWidth: CGFloat = 0
 
-        init(_ parent: WhatsAppComposerView) {
+        init(_ parent: MessageComposer) {
             self.parent = parent
         }
 
@@ -1574,7 +1530,6 @@ struct WhatsAppComposerView: NSViewRepresentable {
     }
 }
 
-// MARK: - WhatsApp Chat Bubble
 
 struct ChatBubble: View {
     let text: String
@@ -1610,7 +1565,7 @@ struct ChatBubble: View {
                     if !isUser && !senderName.isEmpty {
                         Text(senderName)
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(avatarColor(for: senderName))
+                            .foregroundColor(.secondary)
                             .padding(.bottom, 1)
                     }
 
@@ -1647,33 +1602,16 @@ struct ChatBubble: View {
                         MarkdownMessageView(text: bodyText, isUser: isUser)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: isUser ? nil : .infinity, alignment: .leading)
 
-                // Bottom Timestamp & Read Receipt Tick marks
-                HStack(spacing: 3) {
-                    Text(Date().formatted(date: .omitted, time: .shortened))
-                        .font(.system(size: 10))
-                        .foregroundColor(WhatsAppTheme.timestamp(for: colorScheme))
-
-                    if isUser {
-                        HStack(spacing: -3) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 9, weight: .bold))
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .foregroundColor(WhatsAppTheme.blueTick)
-                    }
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(isUser ? WhatsAppTheme.userBubble(for: colorScheme) : WhatsAppTheme.botBubble(for: colorScheme))
+            .background(isUser ? DesktopTheme.userBubble(for: colorScheme) : Color.clear)
             .cornerRadius(10)
-            .shadow(color: Color.black.opacity(0.06), radius: 1, x: 0, y: 1)
-            .frame(maxWidth: 620, alignment: isUser ? .trailing : .leading)
+            .frame(maxWidth: isUser ? 580 : .infinity, alignment: isUser ? .trailing : .leading)
 
-            if !isUser { Spacer(minLength: 40) }
+            if !isUser { Spacer(minLength: 0) }
         }
     }
 }
@@ -1721,7 +1659,7 @@ struct EditGroupModalView: View {
                         HStack {
                             ZStack {
                                 Circle()
-                                    .fill(botId.isEmpty ? WhatsAppTheme.emerald : avatarColor(for: name))
+                                    .fill(botId.isEmpty ? DesktopTheme.accent : avatarColor(for: name))
                                     .frame(width: 28, height: 28)
                                 if botId.isEmpty {
                                     Image(systemName: "sparkles")
@@ -1802,10 +1740,10 @@ struct MemoryCardRow: View {
             HStack(spacing: 8) {
                 Text(entry.scope.uppercased())
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(entry.scope == "shared" ? WhatsAppTheme.emerald : .blue)
+                    .foregroundColor(entry.scope == "shared" ? DesktopTheme.accent : .blue)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background((entry.scope == "shared" ? WhatsAppTheme.emerald : Color.blue).opacity(0.15))
+                    .background((entry.scope == "shared" ? DesktopTheme.accent : Color.blue).opacity(0.15))
                     .cornerRadius(4)
 
                 Text(MemoryOrigin.decode(entry.source) == nil ? entry.source : "Chat turn")
@@ -1872,10 +1810,10 @@ struct GraphTripleCardRow: View {
         HStack(spacing: 10) {
             Text(triple.scope.uppercased())
                 .font(.system(size: 10, weight: .bold))
-                .foregroundColor(triple.scope == "shared" ? WhatsAppTheme.emerald : .blue)
+                .foregroundColor(triple.scope == "shared" ? DesktopTheme.accent : .blue)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background((triple.scope == "shared" ? WhatsAppTheme.emerald : Color.blue).opacity(0.15))
+                .background((triple.scope == "shared" ? DesktopTheme.accent : Color.blue).opacity(0.15))
                 .cornerRadius(4)
 
             HStack(spacing: 6) {
@@ -1892,10 +1830,10 @@ struct GraphTripleCardRow: View {
 
                 Text(triple.predicate)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(WhatsAppTheme.emerald)
+                    .foregroundColor(DesktopTheme.accent)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(WhatsAppTheme.emerald.opacity(0.1))
+                    .background(DesktopTheme.accent.opacity(0.1))
                     .cornerRadius(4)
 
                 Image(systemName: "arrow.right")
@@ -2004,14 +1942,14 @@ struct MemoryView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(WhatsAppTheme.inputFieldBg(for: colorScheme))
+            .background(DesktopTheme.field(for: colorScheme))
             .cornerRadius(8)
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
 
             // Add Memory Bar
             HStack(spacing: 10) {
                 Image(systemName: "plus.circle")
-                    .foregroundColor(WhatsAppTheme.emerald)
+                    .foregroundColor(DesktopTheme.accent)
                 TextField("Add new durable fact or preference…", text: $newMemoryText)
                     .textFieldStyle(.plain)
                     .onSubmit {
@@ -2024,7 +1962,7 @@ struct MemoryView: View {
                     saveNewMemory()
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(WhatsAppTheme.emerald)
+                .tint(DesktopTheme.accent)
                 .disabled(newMemoryText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(.horizontal, 10)
