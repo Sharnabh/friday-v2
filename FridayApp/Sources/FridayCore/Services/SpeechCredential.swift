@@ -3,14 +3,14 @@ import Security
 import LocalAuthentication
 
 public enum SpeechCredential {
-    private static var query: [String: Any] {
+    private static func query(_ service: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "local.friday.assistant.openrouter",
+         kSecAttrService as String: service,
          kSecAttrAccount as String: "speech"]
     }
 
-    public static func read() -> String? {
-        var request = query
+    public static func read(service: String = "local.friday.assistant.openrouter") -> String? {
+        var request = query(service)
         request[kSecReturnData as String] = true
         let context = LAContext()
         context.interactionNotAllowed = true
@@ -21,8 +21,9 @@ public enum SpeechCredential {
         return String(data: bytes, encoding: .utf8)
     }
 
-    public static func save(_ value: String) throws {
+    public static func save(_ value: String, service: String = "local.friday.assistant.openrouter") throws {
         let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = query(service)
         var result: OSStatus
         if key.isEmpty {
             result = SecItemDelete(query as CFDictionary)

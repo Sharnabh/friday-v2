@@ -191,6 +191,7 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
+    let cloudAccount = CloudAccount()
     let mobileCompanion = MobileCompanion()
     private let defaults:UserDefaults
     private let servicesEnabled: Bool
@@ -764,8 +765,11 @@ public final class AppState: ObservableObject {
     @Published var controlTask:Task<String,Error>?
     private var guests=[String:GuestController]()
     func guestForBot()->GuestController {
-        if let existing=guests[activeBotId] {return existing}
-        let new=GuestController();guests[activeBotId]=new;return new
+        guestForOwner(activeBotId)
+    }
+    func guestForOwner(_ id:String)->GuestController {
+        if let existing=guests[id] {return existing}
+        let new=GuestController();guests[id]=new;return new
     }
     private var memorySearchTask: Task<Void,Never>?
     private var currentMemoryQuery = ""
@@ -939,6 +943,13 @@ public final class AppState: ObservableObject {
         let text = inputMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isBusy else { return }
 
+        if currentSessionId.hasPrefix("cloud-account-") {
+            guard !cloudAccount.token.isEmpty else {statusMessage="Sign in under Settings → Account";return}
+            isBusy=true
+            let id=String(currentSessionId.dropFirst("cloud-account-".count))
+            Task { await cloudAccount.sendFromMirror(text,id:id,state:self) }
+            return
+        }
         if isWakeEnabled {VoiceService.shared.stopCapture();isVoiceActive = false}
         inputMessage = ""
         isBusy = true

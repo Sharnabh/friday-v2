@@ -43,6 +43,7 @@ struct FridayMainApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
+                .task { state.cloudAccount.start(state) }
                 .frame(minWidth: 700, minHeight: 520)
         }
         .windowStyle(.titleBar)

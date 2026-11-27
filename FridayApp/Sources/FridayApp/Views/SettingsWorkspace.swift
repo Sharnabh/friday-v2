@@ -24,8 +24,9 @@ struct SettingsWorkspace: View {
     }
 
     var body: some View {
-        WorkspacePage(title: "Settings", selection: $section, sections: ["Mac setup", "Models", "Voice", "Android", "Backup"]) {
+        WorkspacePage(title: "Settings", selection: $section, sections: ["Account", "Mac setup", "Models", "Voice", "Android", "Backup"]) {
             switch section {
+            case "Account": CloudAccountView(account: state.cloudAccount,state:state)
             case "Models": modelSettings; routingSettings
             case "Voice": voiceSettings
             case "Android": MobileConnectionSettings(companion: state.mobileCompanion, state: state)
