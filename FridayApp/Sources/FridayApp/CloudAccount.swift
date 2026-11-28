@@ -347,7 +347,7 @@ struct LiveEntryView: View {
     let autoStart:Bool
     var body:some View {
         if account.token.isEmpty {CloudAccountView(account:account,state:state)}
-        else {GeminiLiveView(account:account,autoStart:autoStart){ text in
+        else {GeminiLiveView(account:account,autoStart:autoStart,modelID:state.voiceModelID){ text in
             state.inputMessage += (state.inputMessage.isEmpty ? "" : "\n") + text
             state.liveWakePresented=false
         }}

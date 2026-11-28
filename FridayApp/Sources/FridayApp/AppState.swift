@@ -191,7 +191,33 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
-    @Published var useGeminiForVoice = false { didSet { defaults.set(useGeminiForVoice,forKey:"voice.useGeminiLive") } }
+    static let liveVoiceModels: [(name:String,id:String)] = [
+        ("Gemini 3.8 Live","gemini-3.8-live"),
+        ("Gemini 3.8 Live Extended Thinking","gemini-3.8-live-extended-thinking"),
+        ("Gemini 3.5 Transcribe Live","gemini-3.5-transcribe-live"),
+        ("Gemini 3.5 Live Translate","gemini-3.5-live-translate-preview"),
+        ("Gemini 3.1 Flash Live Preview","gemini-3.1-flash-live-preview"),
+        ("Gemini 2.5 Flash Native Audio Dialog","gemini-2.5-flash-native-audio-preview-12-2025")
+    ]
+    @Published var voiceModelID = "" { didSet {defaults.set(voiceModelID,forKey:"voice.modelID")} }
+    var useGeminiForVoice:Bool { Self.liveVoiceModels.contains { $0.id == voiceModelID } }
+    var configuredVoiceModelName:String {
+        if !model.isEmpty {return model}
+        let config=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes/config.yaml")
+        if let yaml=try? String(contentsOf:config,encoding:.utf8){
+            var inModel=false
+            for line in yaml.components(separatedBy:.newlines){
+                let value=line.trimmingCharacters(in:.whitespaces)
+                if value.isEmpty || value.hasPrefix("#"){continue}
+                if !line.hasPrefix(" "){inModel=value=="model:";continue}
+                if inModel && value.hasPrefix("default:"){
+                    let name=value.dropFirst(8).trimmingCharacters(in:.whitespaces).trimmingCharacters(in:CharacterSet(charactersIn:"\"'"))
+                    if !name.isEmpty{return name}
+                }
+            }
+        }
+        return provider.isEmpty ? "Hermes default" : provider+" default"
+    }
     @Published var liveWakePresented=false
     var autoStartLive=false
     func presentLive(fromWake:Bool=false){
@@ -211,7 +237,7 @@ public final class AppState: ObservableObject {
                 appSupport:URL = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0],
                 startServices:Bool = true) {
         self.defaults=defaults
-        useGeminiForVoice=defaults.bool(forKey:"voice.useGeminiLive")
+        voiceModelID=defaults.string(forKey:"voice.modelID") ?? (defaults.bool(forKey:"voice.useGeminiLive") ? "gemini-3.8-live" : "")
         self.servicesEnabled = startServices
         let dbUrl = appSupport.appendingPathComponent("Friday/Memory.sqlite")
         let reminderFile = appSupport.appendingPathComponent("FRIDAY/reminders.json")

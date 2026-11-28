@@ -74,7 +74,6 @@ async function mountGeminiLive(
     if (transcript.value.trim()) useDraft(transcript.value.trim());
   };
   mode.onchange = () => {
-    try{localStorage.setItem("geminiLiveMode",mode.value)}catch{}
     language.hidden = !mode.value.includes("translate");
   };
   try {
@@ -84,7 +83,12 @@ async function mountGeminiLive(
       opt.value = id;
       mode.append(opt);
     }
-    try{const saved=localStorage.getItem("geminiLiveMode");if(catalog.models.some(row=>row[1]===saved))mode.value=saved}catch{}
+    if(!catalog.models.some(row=>row[1]===options.modelID))throw Error("Choose an available voice response model in Settings.");
+    mode.value=options.modelID;
+    mode.hidden=true;
+    const selected=document.createElement("strong");
+    selected.textContent=mode.selectedOptions[0].textContent;
+    root.insertBefore(selected,mode);
     mode.onchange();
   } catch (e) {
     status.textContent = e.message;

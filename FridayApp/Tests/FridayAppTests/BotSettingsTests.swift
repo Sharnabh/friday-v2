@@ -48,7 +48,7 @@ final class BotSettingsTests:XCTestCase {
 
         let state=AppState(defaults:prefs,appSupport:dir,startServices:false)
         XCTAssertFalse(state.useGeminiForVoice)
-        state.useGeminiForVoice = true
+        state.voiceModelID = "gemini-3.8-live-extended-thinking"
         XCTAssertFalse(state.isDeciderRoutingEnabled)
         XCTAssertEqual(state.memoryEmbeddingMode, .localOnly)
         XCTAssertFalse(state.isCloudRerankEnabled)
@@ -61,7 +61,7 @@ final class BotSettingsTests:XCTestCase {
         let coderId = try XCTUnwrap(state.bots.first(where: { $0.name == "Coder" })?.id)
 
         let reloaded=AppState(defaults:prefs,appSupport:dir,startServices:false)
-        XCTAssertTrue(reloaded.useGeminiForVoice)
+        XCTAssertEqual(reloaded.voiceModelID,"gemini-3.8-live-extended-thinking")
         reloaded.toggleVoiceRecording()
         XCTAssertTrue(reloaded.liveWakePresented)
         XCTAssertTrue(reloaded.isDeciderRoutingEnabled)

@@ -129,9 +129,9 @@ struct SettingsWorkspace: View {
     }
 
     @ViewBuilder private var voiceSettings: some View {
-        Picker("Voice responses", selection:$state.useGeminiForVoice){
-            Text("Preferred model").tag(false)
-            Text("Gemini Live").tag(true)
+        Picker("Voice response model", selection:$state.voiceModelID){
+            Text(state.configuredVoiceModelName).tag("")
+            ForEach(AppState.liveVoiceModels,id:\.id){item in Text(item.name).tag(item.id)}
         }.pickerStyle(.menu)
         GroupBox("Speech output") {
             VStack(alignment: .leading, spacing: 8) {

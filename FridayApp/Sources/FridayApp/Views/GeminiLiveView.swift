@@ -5,6 +5,7 @@ import WebKit
 struct GeminiLiveView: NSViewRepresentable {
     let account: CloudAccount
     var autoStart=false
+    let modelID:String
     let insert: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(account: account, insert: insert) }
@@ -25,7 +26,7 @@ struct GeminiLiveView: NSViewRepresentable {
         <style>:root{color-scheme:light dark;font:15px system-ui}body{padding:20px}main{display:grid;gap:10px}button,select,input,textarea{font:inherit;padding:8px;border-radius:8px}[hidden]{display:none}</style>
         <main id="panel"></main><script>\(script)
         const call=(action,data)=>webkit.messageHandlers.live.postMessage({action,data});
-        mountGeminiLive(document.querySelector('main'),call,text=>call('draft',{text}),undefined,{autoStart:\(autoStart ? "true" : "false")});
+        mountGeminiLive(document.querySelector('main'),call,text=>call('draft',{text}),undefined,{modelID:\(String(decoding:(try? JSONEncoder().encode(modelID)) ?? Data(),as:UTF8.self)),autoStart:\(autoStart ? "true" : "false")});
         </script>
         """, baseURL: URL(string:"https://friday.local"))
         return web
