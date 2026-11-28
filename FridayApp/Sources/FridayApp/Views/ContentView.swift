@@ -419,6 +419,7 @@ struct ChatView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.colorScheme) var colorScheme
     @State private var showSettingsBar = false
+    @State private var showGeminiLive = false
     @State private var composerHeight: CGFloat = 22
     @State private var composerFocusTrigger: Int = 0
 
@@ -804,6 +805,16 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Record Voice Message")
+                    .contextMenu {
+                        Button("Gemini Live in cloud chat"){showGeminiLive=true}
+                            .disabled(state.cloudAccount.token.isEmpty)
+                    }
+                    .sheet(isPresented:$showGeminiLive){
+                        VStack {
+                            GeminiLiveView(account:state.cloudAccount){text in state.inputMessage += (state.inputMessage.isEmpty ? "" : "\n") + text;showGeminiLive=false}
+                            Button("Close"){showGeminiLive=false}
+                        }.padding().frame(width:460,height:490)
+                    }
                 } else {
                     Button {
                         state.sendMessage()

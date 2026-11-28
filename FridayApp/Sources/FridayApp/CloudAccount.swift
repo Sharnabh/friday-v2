@@ -82,6 +82,13 @@ final class CloudAccount: ObservableObject {
         do { snapshot = try await post("workspace",req) } catch {status = error.localizedDescription}
     }
 
+    func liveRequest(_ action:String,_ data:[String:Any],_ target:[String:String]) async throws -> [String:Any] {
+        var req=data
+        for (key,value) in target {req[key]=value}
+        req["action"]=action
+        return try await post("workspace",req)
+    }
+
     private func hash(_ data:Data) -> String { SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined() }
 
     private func upload(_ key:String,_ fields:[String:Any]) async throws {
@@ -331,6 +338,7 @@ struct CloudAccountView: View {
     let state:AppState
     @State private var user=""
     @State private var password=""
+    @State private var showLive=false
     @State private var message=""
     @AppStorage("cloudMacTools") private var allowTools=false
     var body: some View {
@@ -345,6 +353,8 @@ struct CloudAccountView: View {
                 }
             } else {
                 HStack {Text(account.name).font(.headline);Spacer();Button("Sign out"){Task{await account.signOut()}}}
+                Button("Gemini Live"){showLive=true}
+                    .sheet(isPresented:$showLive){VStack{GeminiLiveView(account:account){text in message=text;showLive=false};Button("Close"){showLive=false}}.padding().frame(width:460,height:490)}
                 Toggle("Allow requests from my phone to use Mac tools",isOn:$allowTools)
                 HStack {
                     Menu("Cloud chats"){
