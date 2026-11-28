@@ -4,6 +4,7 @@ import WebKit
 
 struct GeminiLiveView: NSViewRepresentable {
     let account: CloudAccount
+    var autoStart=false
     let insert: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(account: account, insert: insert) }
@@ -24,7 +25,7 @@ struct GeminiLiveView: NSViewRepresentable {
         <style>:root{color-scheme:light dark;font:15px system-ui}body{padding:20px}main{display:grid;gap:10px}button,select,input,textarea{font:inherit;padding:8px;border-radius:8px}[hidden]{display:none}</style>
         <main id="panel"></main><script>\(script)
         const call=(action,data)=>webkit.messageHandlers.live.postMessage({action,data});
-        mountGeminiLive(document.querySelector('main'),call,text=>call('draft',{text}));
+        mountGeminiLive(document.querySelector('main'),call,text=>call('draft',{text}),undefined,{autoStart:\(autoStart ? "true" : "false")});
         </script>
         """, baseURL: URL(string:"https://friday.local"))
         return web
@@ -39,7 +40,7 @@ struct GeminiLiveView: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKUIDelegate {
         let account: CloudAccount
         let insert: (String) -> Void
-        let target: [String: String]
+        var target: [String: String]
         let identity: String
         init(account: CloudAccount, insert: @escaping (String) -> Void) {
             self.account=account; self.insert=insert; identity=account.token
@@ -50,7 +51,13 @@ struct GeminiLiveView: NSViewRepresentable {
             if action=="draft", let text=data["text"] as? String {insert(text);replyHandler(true,nil);return}
             guard ["liveModels","liveToken","liveTurn","liveTasks"].contains(action) else {replyHandler(nil,"Unknown action.");return}
             Task {
-                do { let result=try await account.liveRequest(action,data,target);replyHandler(result,nil) }
+                do {
+                    if action=="liveModels",target["session"]?.isEmpty != false {
+                        let snapshot=try await account.liveRequest("state",[:],[:])
+                        target=["bot":snapshot["bot"] as? String ?? "", "session":snapshot["session"] as? String ?? ""]
+                    }
+                    let result=try await account.liveRequest(action,data,target);replyHandler(result,nil)
+                }
                 catch {replyHandler(nil,error.localizedDescription)}
             }
         }

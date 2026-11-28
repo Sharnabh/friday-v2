@@ -6,6 +6,7 @@ import FridayCore
 final class CloudAccount: ObservableObject {
     static let service = "local.friday.assistant.cloud.session"
     @Published var token = SpeechCredential.read(service: service) ?? ""
+    @Published var signing = false
     @Published var status = ""
     @Published var snapshot: [String:Any] = [:]
     @Published var name = UserDefaults.standard.string(forKey:"cloudAccountName") ?? ""
@@ -34,7 +35,7 @@ final class CloudAccount: ObservableObject {
         var req = URLRequest(url:URL(string:endpoint+path)!)
         req.httpMethod = "POST"
         req.setValue("application/json",forHTTPHeaderField:"Content-Type")
-        req.setValue("Bearer "+used,forHTTPHeaderField:"Authorization")
+        if !used.isEmpty {req.setValue("Bearer "+used,forHTTPHeaderField:"Authorization")}
         req.httpBody = try JSONSerialization.data(withJSONObject:body)
         let (data,res) = try await URLSession.shared.data(for:req)
         guard used == token else { throw CancellationError() }
@@ -46,10 +47,17 @@ final class CloudAccount: ObservableObject {
     }
 
     func sign(_ user:String,_ password:String,create:Bool,state:AppState) async {
+        guard !signing else {return}
+        let user=user.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard user.range(of:"^[a-zA-Z0-9_.-]{3,64}$",options:.regularExpression) != nil else {status="Use a username with 3–64 letters, digits, dots, dashes or underscores.";return}
+        guard (12...256).contains(password.count) else {status="Enter a password of 12–256 characters.";return}
+        signing=true;status=create ? "Creating account…" : "Signing in…"
+        defer {signing=false}
         do {
             let response = try await post(create ? "signup":"login",["username":user,"password":password])
             guard let session = response["token"] as? String else { throw FridayError.message("Missing session") }
-            try SpeechCredential.save(session,service:Self.service)
+            do {try SpeechCredential.save(session,service:Self.service);status="Signed in."}
+            catch {status="Signed in for this session. Keychain could not save the login."}
             revision = -1; lastHeavySync = .distantPast
             token = session
             name = user.lowercased()
@@ -333,28 +341,41 @@ final class CloudAccount: ObservableObject {
     }
 }
 
+struct LiveEntryView: View {
+    @ObservedObject var account:CloudAccount
+    let state:AppState
+    let autoStart:Bool
+    var body:some View {
+        if account.token.isEmpty {CloudAccountView(account:account,state:state)}
+        else {GeminiLiveView(account:account,autoStart:autoStart){ text in
+            state.inputMessage += (state.inputMessage.isEmpty ? "" : "\n") + text
+            state.liveWakePresented=false
+        }}
+    }
+}
+
 struct CloudAccountView: View {
     @ObservedObject var account:CloudAccount
     let state:AppState
     @State private var user=""
     @State private var password=""
-    @State private var showLive=false
     @State private var message=""
     @AppStorage("cloudMacTools") private var allowTools=false
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             if account.token.isEmpty {
+                Text("Gemini Live").font(.headline)
                 Text("Sign in to sync this Mac’s chats, assistants and memories with your FRIDAY account.")
                 TextField("Username",text:$user)
                 SecureField("Password",text:$password)
+                if !account.status.isEmpty {Text(account.status).textSelection(.enabled)}
                 HStack {
-                    Button("Sign in"){Task{await account.sign(user,password,create:false,state:state);password=""}}
-                    Button("Create account"){Task{await account.sign(user,password,create:true,state:state);password=""}}
-                }
+                    Button("Sign in"){Task{await account.sign(user,password,create:false,state:state);if !account.token.isEmpty {password=""}}}
+                    Button("Create account"){Task{await account.sign(user,password,create:true,state:state);if !account.token.isEmpty {password=""}}}
+                }.disabled(account.signing)
             } else {
                 HStack {Text(account.name).font(.headline);Spacer();Button("Sign out"){Task{await account.signOut()}}}
-                Button("Gemini Live"){showLive=true}
-                    .sheet(isPresented:$showLive){VStack{GeminiLiveView(account:account){text in message=text;showLive=false};Button("Close"){showLive=false}}.padding().frame(width:460,height:490)}
+                Button("Gemini Live"){state.presentLive()}
                 Toggle("Allow requests from my phone to use Mac tools",isOn:$allowTools)
                 HStack {
                     Menu("Cloud chats"){
@@ -367,7 +388,7 @@ struct CloudAccountView: View {
                 Text((account.snapshot["turns"] as? [String] ?? []).joined(separator:"\n\n")).textSelection(.enabled)
                 HStack {TextField("Message FRIDAY",text:$message);Button("Send"){let text=message;Task{await account.action("send",["text":text]);message=""}}}
             }
-            Text(account.status).font(.caption)
+            if !account.token.isEmpty {Text(account.status).font(.caption)}
         }.padding()
     }
 }

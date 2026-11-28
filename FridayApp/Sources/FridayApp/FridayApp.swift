@@ -43,6 +43,12 @@ struct FridayMainApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
+                .sheet(isPresented:$state.liveWakePresented){
+                    VStack{
+                        LiveEntryView(account:state.cloudAccount,state:state,autoStart:state.autoStartLive)
+                        Button("Close"){state.liveWakePresented=false}
+                    }.padding().frame(width:460,height:490)
+                }
                 .task { state.cloudAccount.start(state) }
                 .frame(minWidth: 700, minHeight: 520)
         }

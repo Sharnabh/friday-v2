@@ -191,6 +191,14 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
+    @Published var liveWakePresented=false
+    var autoStartLive=false
+    func presentLive(fromWake:Bool=false){
+        guard !liveWakePresented else {return}
+        autoStartLive=fromWake
+        liveWakePresented=true
+        if VoiceService.shared.isActive {VoiceService.shared.stopCapture();isVoiceActive=false}
+    }
     let cloudAccount = CloudAccount()
     let mobileCompanion = MobileCompanion()
     private let defaults:UserDefaults
@@ -292,6 +300,11 @@ public final class AppState: ObservableObject {
         voice.onLevelUpdate = { [weak self] level in self?.audioLevel = level }
         voice.onStateUpdate = { [weak self] state in
             if self?.isWakeEnabled == true && state == "Listening" {AssistantService.shared.stopSpeaking()}
+            if let self, state=="Listening", self.isWakeEnabled, !self.cloudAccount.token.isEmpty, !self.liveWakePresented {
+                self.presentLive(fromWake:true)
+                self.statusMessage="Opening Gemini Live"
+                return
+            }
             self?.statusMessage = state
         }
         voice.onTranscriptionComplete = { [weak self] text in
@@ -309,7 +322,7 @@ public final class AppState: ObservableObject {
     }
 
     private func armWakeIfReady() {
-        guard isWakeEnabled, !isBusy, !VoiceService.shared.isActive else {return}
+        guard isWakeEnabled, !liveWakePresented, !isBusy, !VoiceService.shared.isActive else {return}
         isVoiceActive = true
         VoiceService.shared.startCapture(handsFree:true,micDeviceName:selectedMic)
     }

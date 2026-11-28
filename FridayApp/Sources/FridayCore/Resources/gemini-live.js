@@ -4,6 +4,7 @@ async function mountGeminiLive(
   request,
   useDraft,
   captureState = () => {},
+  options = {},
 ) {
   const node = (tag, label) => {
     const e = document.createElement(tag);
@@ -63,6 +64,7 @@ async function mountGeminiLive(
     finish("Session closed.");
     document.removeEventListener("visibilitychange", visibility);
   };
+  root.fridayAudioError=msg=>finish(msg);
   root.fridayClose = cleanup;
   root.fridayPause = () => {
     if (run?.ws) finish("Session stopped.");
@@ -72,6 +74,7 @@ async function mountGeminiLive(
     if (transcript.value.trim()) useDraft(transcript.value.trim());
   };
   mode.onchange = () => {
+    try{localStorage.setItem("geminiLiveMode",mode.value)}catch{}
     language.hidden = !mode.value.includes("translate");
   };
   try {
@@ -81,6 +84,7 @@ async function mountGeminiLive(
       opt.value = id;
       mode.append(opt);
     }
+    try{const saved=localStorage.getItem("geminiLiveMode");if(catalog.models.some(row=>row[1]===saved))mode.value=saved}catch{}
     mode.onchange();
   } catch (e) {
     status.textContent = e.message;
@@ -100,7 +104,7 @@ async function mountGeminiLive(
     }
     const s = { playing: new Set(), next: 0, input: "", output: "" };
     run = s;
-    captureState(true);
+
     const baseText = transcript.value.trimEnd();
     let completed = baseText ? baseText + "\n" : "";
     start.disabled = true;
@@ -111,11 +115,15 @@ async function mountGeminiLive(
     try {
       s.ctx = new AudioContext();
       await s.ctx.resume();
-      const mic = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true },
-      });
+      await captureState(true);
+      if(run!==s)return;
+      let mic=null;
+      if(!options.nativeAudio) {
+        try {mic=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true}})}
+        catch(error){if(error.name!=="NotReadableError")throw error;await new Promise(resolve=>setTimeout(resolve,350));if(run!==s)return;mic=await navigator.mediaDevices.getUserMedia({audio:true})}
+      }
       if (run !== s) {
-        mic.getTracks().forEach((t) => t.stop());
+        mic?.getTracks().forEach((t) => t.stop());
         return;
       }
       s.mic = mic;
@@ -227,6 +235,14 @@ async function mountGeminiLive(
             if (msg.setupComplete) {
               clearTimeout(s.timeout);
               status.textContent = "Listening";
+              if(options.initialText && !dictate && !translate && !handle){
+                ws.send(JSON.stringify({clientContent:{turns:[{role:"user",parts:[{text:options.initialText}]}],turnComplete:true}}));
+                s.input=options.initialText;options.initialText="";
+              }
+              if(options.nativeAudio){
+                root.fridayPCM=data=>{if(run===s&&ws.readyState===1&&ws.bufferedAmount<131072)ws.send(JSON.stringify({realtimeInput:{audio:{mimeType:"audio/pcm;rate=16000",data}}}))};
+                return;
+              }
               const source = s.ctx.createMediaStreamSource(mic),
                 capture = s.ctx.createScriptProcessor(2048, 1, 1);
               s.capture = capture;
@@ -330,4 +346,5 @@ async function mountGeminiLive(
         finish(e.message || "Microphone or Live session unavailable.");
     }
   };
+  if(options.autoStart && !closed && !start.disabled) await start.onclick();
 }
