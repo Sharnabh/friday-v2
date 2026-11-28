@@ -101,6 +101,26 @@ final class MobileCompanion: ObservableObject {
         case "selectBot":
             guard let id = request["id"] as? String, id.isEmpty || state.bots.contains(where: { $0.id == id }) || state.groups.contains(where: { $0.id == id }) else { return ["error": "Unknown assistant"] }
             state.selectBot(id)
+        case "createBot", "updateBot":
+            guard let name = request["name"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter an assistant name."] }
+            let instructions = request["instructions"] as? String ?? ""
+            if action == "createBot" {
+                state.createBot(name: name, instructions: instructions)
+            } else {
+                guard let id = request["id"] as? String, id.isEmpty || state.bots.contains(where: { $0.id == id }) else { return ["error": "Unknown assistant"] }
+                state.updateBot(id: id, name: name, instructions: instructions)
+            }
+        case "createGroup", "updateGroup":
+            let valid = Set([""] + state.bots.map(\.id))
+            guard let name = request["name"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let members = request["members"] as? [String], Set(members).count == members.count,
+                  members.count >= 2, Set(members).isSubset(of: valid) else { return ["error": "Enter a group name and choose at least two assistants."] }
+            if action == "createGroup" {
+                state.createGroup(name: name, memberIds: members)
+            } else {
+                guard let id = request["id"] as? String, state.groups.contains(where: { $0.id == id }) else { return ["error": "Unknown group"] }
+                state.updateGroup(id: id, name: name, memberIds: members)
+            }
         case "settings":
             guard let provider = request["provider"] as? String, let model = request["model"] as? String,
                   let decider = request["decider"] as? Bool, let rerank = request["rerank"] as? Bool else { return ["error": "Incomplete settings"] }
@@ -122,7 +142,10 @@ final class MobileCompanion: ObservableObject {
         default: return ["error": "Unknown action"]
         }
         state.loadSessions()
-        return ["bot": state.activeBotId, "name": state.currentBotName, "session": state.currentSessionId,
+        let bots = [["id": "", "name": state.fridayName, "instructions": state.fridayInstructions]] +
+            state.bots.map { ["id": $0.id, "name": $0.name, "instructions": $0.instructions] }
+        let groups: [[String: Any]] = state.groups.map { ["id": $0.id, "name": $0.name, "members": $0.members] }
+        return ["canManageAssistants": true, "bots": bots, "groups": groups, "bot": state.activeBotId, "name": state.currentBotName, "session": state.currentSessionId,
                 "assistants": [["id": "", "name": state.fridayName]] + state.bots.map { ["id": $0.id, "name": $0.name] } + state.groups.map { ["id": $0.id, "name": $0.name] },
                 "sessions": state.savedSessions.map { ["id": $0.id, "name": $0.title] },
                 "turns": state.currentTranscript, "busy": state.isBusy, "status": state.statusMessage,

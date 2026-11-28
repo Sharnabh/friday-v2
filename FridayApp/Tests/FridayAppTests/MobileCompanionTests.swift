@@ -15,7 +15,7 @@ final class MobileCompanionTests: XCTestCase {
         defer { bridge.stop() }
         for _ in 0..<100 where bridge.token.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertFalse(bridge.token.isEmpty)
-        func request(_ body: [String: String], token: String) async throws -> (Int, [String: Any]) {
+        func request(_ body: [String: Any], token: String) async throws -> (Int, [String: Any]) {
             var request = URLRequest(url: URL(string: "http://127.0.0.1:\(bridge.listeningPort)/v1/workspace")!)
             request.httpMethod = "POST"
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -35,5 +35,13 @@ final class MobileCompanionTests: XCTestCase {
         XCTAssertNotNil(stale.1["error"])
         let selected = try await request(["action":"selectSession","bot":"","session":state.currentSessionId,"id":"first"], token:bridge.token)
         XCTAssertEqual(selected.1["session"] as? String, "first")
+        XCTAssertEqual(selected.1["canManageAssistants"] as? Bool, true)
+        let solo = try await request(["action":"createBot","bot":"","session":"first","name":"Atlas","instructions":"Plan projects"], token:bridge.token)
+        let bot = try XCTUnwrap(solo.1["bot"] as? String)
+        let session = try XCTUnwrap(solo.1["session"] as? String)
+        let group = try await request(["action":"createGroup","bot":bot,"session":session,"name":"Design team","members":["",bot]], token:bridge.token)
+        XCTAssertEqual(group.1["name"] as? String, "Design team")
+        XCTAssertEqual((group.1["groups"] as? [[String:Any]])?.first?["members"] as? [String], ["",bot])
+
     }
 }
