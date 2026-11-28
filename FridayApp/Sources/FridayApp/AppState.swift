@@ -191,6 +191,7 @@ public final class AppState: ObservableObject {
     public var reminderService: ReminderService
     public var activityService: ActivityService
 
+    @Published var useGeminiForVoice = false { didSet { defaults.set(useGeminiForVoice,forKey:"voice.useGeminiLive") } }
     @Published var liveWakePresented=false
     var autoStartLive=false
     func presentLive(fromWake:Bool=false){
@@ -210,6 +211,7 @@ public final class AppState: ObservableObject {
                 appSupport:URL = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0],
                 startServices:Bool = true) {
         self.defaults=defaults
+        useGeminiForVoice=defaults.bool(forKey:"voice.useGeminiLive")
         self.servicesEnabled = startServices
         let dbUrl = appSupport.appendingPathComponent("Friday/Memory.sqlite")
         let reminderFile = appSupport.appendingPathComponent("FRIDAY/reminders.json")
@@ -300,7 +302,7 @@ public final class AppState: ObservableObject {
         voice.onLevelUpdate = { [weak self] level in self?.audioLevel = level }
         voice.onStateUpdate = { [weak self] state in
             if self?.isWakeEnabled == true && state == "Listening" {AssistantService.shared.stopSpeaking()}
-            if let self, state=="Listening", self.isWakeEnabled, !self.cloudAccount.token.isEmpty, !self.liveWakePresented {
+            if let self, state=="Listening", self.isWakeEnabled, self.useGeminiForVoice, !self.liveWakePresented {
                 self.presentLive(fromWake:true)
                 self.statusMessage="Opening Gemini Live"
                 return
@@ -328,6 +330,7 @@ public final class AppState: ObservableObject {
     }
 
     public func toggleVoiceRecording() {
+        if useGeminiForVoice {presentLive(fromWake:true);return}
         if isWakeEnabled {isWakeEnabled = false; return}
         if VoiceService.shared.isActive {VoiceService.shared.finishCapture();return}
         isVoiceActive = true

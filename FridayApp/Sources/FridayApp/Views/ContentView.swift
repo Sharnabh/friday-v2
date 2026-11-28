@@ -789,8 +789,6 @@ struct ChatView: View {
                 }
                 .padding(.vertical, 7)
 
-                Button("Gemini Live"){state.presentLive()}
-                    .help("Talk, translate or dictate with Gemini Live")
                 if state.inputMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         state.toggleVoiceRecording()

@@ -47,6 +47,8 @@ final class BotSettingsTests:XCTestCase {
         defer {prefs.removePersistentDomain(forName:domain);try? FileManager.default.removeItem(at:dir)}
 
         let state=AppState(defaults:prefs,appSupport:dir,startServices:false)
+        XCTAssertFalse(state.useGeminiForVoice)
+        state.useGeminiForVoice = true
         XCTAssertFalse(state.isDeciderRoutingEnabled)
         XCTAssertEqual(state.memoryEmbeddingMode, .localOnly)
         XCTAssertFalse(state.isCloudRerankEnabled)
@@ -59,6 +61,9 @@ final class BotSettingsTests:XCTestCase {
         let coderId = try XCTUnwrap(state.bots.first(where: { $0.name == "Coder" })?.id)
 
         let reloaded=AppState(defaults:prefs,appSupport:dir,startServices:false)
+        XCTAssertTrue(reloaded.useGeminiForVoice)
+        reloaded.toggleVoiceRecording()
+        XCTAssertTrue(reloaded.liveWakePresented)
         XCTAssertTrue(reloaded.isDeciderRoutingEnabled)
         XCTAssertEqual(reloaded.memoryEmbeddingMode, .multimodalRAG)
         XCTAssertTrue(reloaded.isCloudRerankEnabled)

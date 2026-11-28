@@ -129,6 +129,10 @@ struct SettingsWorkspace: View {
     }
 
     @ViewBuilder private var voiceSettings: some View {
+        Picker("Voice responses", selection:$state.useGeminiForVoice){
+            Text("Preferred model").tag(false)
+            Text("Gemini Live").tag(true)
+        }.pickerStyle(.menu)
         GroupBox("Speech output") {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Speak responses automatically (always on in Hey Friday mode)", isOn: $state.isTTSEnabled)

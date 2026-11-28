@@ -364,7 +364,6 @@ struct CloudAccountView: View {
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             if account.token.isEmpty {
-                Text("Gemini Live").font(.headline)
                 Text("Sign in to sync this Mac’s chats, assistants and memories with your FRIDAY account.")
                 TextField("Username",text:$user)
                 SecureField("Password",text:$password)
@@ -375,7 +374,6 @@ struct CloudAccountView: View {
                 }.disabled(account.signing)
             } else {
                 HStack {Text(account.name).font(.headline);Spacer();Button("Sign out"){Task{await account.signOut()}}}
-                Button("Gemini Live"){state.presentLive()}
                 Toggle("Allow requests from my phone to use Mac tools",isOn:$allowTools)
                 HStack {
                     Menu("Cloud chats"){
